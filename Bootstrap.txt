@@ -1,0 +1,311 @@
+Sí. Te dejo una forma **estandarizada** de usar bootstrap, pensada como plantilla para prueba. La idea es que solo cambies nombres de variables, grupos y estadístico.
+
+**1. Bootstrap Para Dos Grupos Independientes**
+
+Úsalo cuando quieres comparar una variable numérica entre **dos grupos independientes**.
+
+Ejemplo de pregunta:
+
+> Comparar si el promedio de puntajes difiere entre estudiantes científico-humanistas y técnico-profesionales.
+
+Plantilla:
+
+```r
+library(tidyverse)
+
+# REEMPLAZAR:
+# y = variable numérica que quieres comparar
+# grupo = variable que identifica los grupos
+
+datos <- tibble(
+  grupo = factor(c(rep("Grupo_A", length(vector_A)),
+                   rep("Grupo_B", length(vector_B)))),
+  y = c(vector_A, vector_B)
+)
+
+B <- 2999
+set.seed(123)
+
+# Diferencia observada
+dif_obs <- datos |>
+  group_by(grupo) |>
+  summarise(media = mean(y), .groups = "drop") |>
+  summarise(dif = media[1] - media[2]) |>
+  pull(dif)
+
+# Bootstrap independiente: remuestreo dentro de cada grupo
+dif_boot <- numeric(B)
+
+for (i in 1:B) {
+  boot_data <- datos |>
+    group_by(grupo) |>
+    slice_sample(n = n(), replace = TRUE) |>
+    ungroup()
+  
+  dif_boot[i] <- boot_data |>
+    group_by(grupo) |>
+    summarise(media = mean(y), .groups = "drop") |>
+    summarise(dif = media[1] - media[2]) |>
+    pull(dif)
+}
+
+# Intervalo de confianza bootstrap
+quantile(dif_boot, probs = c(0.025, 0.975))
+
+# Gráfico
+hist(dif_boot, breaks = 30, col = "steelblue",
+     main = "Distribución bootstrap de la diferencia de medias",
+     xlab = "Diferencia de medias")
+abline(v = dif_obs, col = "red", lwd = 2)
+abline(v = 0, col = "black", lty = 2)
+```
+
+Lugares a reemplazar:
+
+```r
+vector_A
+vector_B
+"Grupo_A"
+"Grupo_B"
+y
+grupo
+B
+set.seed(...)
+```
+
+Interpretación:
+
+```text
+Si el intervalo de confianza incluye 0, no hay evidencia clara de diferencia.
+Si el intervalo queda completamente sobre 0, el grupo 1 tiene mayor media.
+Si el intervalo queda completamente bajo 0, el grupo 2 tiene mayor media.
+```
+
+---
+
+**2. Bootstrap Para Más De Dos Grupos Independientes**
+
+Úsalo cuando quieres comparar una variable numérica entre **tres o más grupos independientes**, parecido a un ANOVA con remuestreo.
+
+Ejemplo de pregunta:
+
+> Comparar si el promedio de ingreso difiere según nivel educacional.
+
+Plantilla:
+
+```r
+library(tidyverse)
+
+# REEMPLAZAR:
+# datos = tu base
+# y = variable numérica
+# grupo = variable categórica con 3 o más niveles
+
+B <- 2999
+set.seed(123)
+
+# Estadístico F observado
+modelo_obs <- aov(y ~ grupo, data = datos)
+F_obs <- summary(modelo_obs)[[1]][["F value"]][1]
+
+# Centrar bajo H0: todas las medias grupales iguales
+media_global <- mean(datos$y, na.rm = TRUE)
+
+datos_h0 <- datos |>
+  group_by(grupo) |>
+  mutate(y_centrado = y - mean(y, na.rm = TRUE) + media_global) |>
+  ungroup()
+
+# Bootstrap estratificado
+F_boot <- numeric(B)
+
+for (i in 1:B) {
+  boot_data <- datos_h0 |>
+    group_by(grupo) |>
+    slice_sample(n = n(), replace = TRUE) |>
+    ungroup()
+  
+  modelo_boot <- aov(y_centrado ~ grupo, data = boot_data)
+  F_boot[i] <- summary(modelo_boot)[[1]][["F value"]][1]
+}
+
+# p-valor bootstrap
+p_valor <- mean(F_boot >= F_obs)
+p_valor
+```
+
+Interpretación:
+
+```text
+Si p < alfa, se rechaza H0.
+Hay evidencia de que al menos un grupo tiene una media distinta.
+```
+
+Lugares a reemplazar:
+
+```r
+datos
+y
+grupo
+B
+set.seed(...)
+```
+
+---
+
+**3. Bootstrap Para Modelo De Regresión Lineal**
+
+Úsalo cuando ya tienes un modelo de regresión lineal y quieres evaluar su desempeño de forma más estable.
+
+Ejemplo de pregunta:
+
+> Construir un modelo de regresión lineal múltiple para predecir Weight y evaluarlo usando bootstrapping.
+
+Plantilla:
+
+```r
+library(caret)
+
+# REEMPLAZAR:
+# respuesta = variable numérica de salida
+# pred1, pred2, pred3 = predictores
+
+formula_modelo <- respuesta ~ pred1 + pred2 + pred3
+
+B <- 2000
+set.seed(123)
+
+control <- trainControl(method = "boot", number = B)
+
+modelo_boot <- train(
+  formula_modelo,
+  data = datos,
+  method = "lm",
+  trControl = control
+)
+
+modelo_boot
+summary(modelo_boot$finalModel)
+modelo_boot$results
+```
+
+Métricas importantes:
+
+```text
+RMSE = error promedio del modelo
+Rsquared = proporción de variabilidad explicada
+MAE = error absoluto promedio
+RMSESD = estabilidad del RMSE
+```
+
+Interpretación:
+
+```text
+Buen desempeño: RMSE bajo respecto a la escala de la variable respuesta.
+Estabilidad: RMSESD bajo y métricas parecidas entre remuestras.
+```
+
+---
+
+**4. Bootstrap Pareado**
+
+Úsalo cuando las observaciones están relacionadas, por ejemplo:
+
+```text
+antes/después de las mismas personas
+modelo A/modelo B en las mismas instancias
+mediciones repetidas del mismo sujeto
+```
+
+Plantilla:
+
+```r
+library(tidyverse)
+
+# REEMPLAZAR:
+# antes y despues por tus variables apareadas
+
+datos <- tibble(
+  antes = vector_antes,
+  despues = vector_despues
+) |>
+  mutate(dif = despues - antes)
+
+B <- 2999
+set.seed(123)
+
+dif_obs <- mean(datos$dif)
+
+dif_boot <- numeric(B)
+
+for (i in 1:B) {
+  boot_data <- datos |>
+    slice_sample(n = n(), replace = TRUE)
+  
+  dif_boot[i] <- mean(boot_data$dif)
+}
+
+quantile(dif_boot, probs = c(0.025, 0.975))
+```
+
+Importante:
+
+```text
+En datos apareados se remuestrean pares completos, no cada variable por separado.
+```
+
+---
+
+**Posibles Enunciados Donde Usarlo**
+
+Usaría bootstrap si el enunciado dice algo como:
+
+```text
+Compare las medias de dos grupos independientes cuando no se cumple normalidad.
+```
+
+```text
+Construya un intervalo de confianza para la diferencia de medias mediante remuestreo.
+```
+
+```text
+Compare más de dos grupos independientes usando bootstrapping.
+```
+
+```text
+Aplique un análisis post-hoc con las mismas remuestras usadas en la prueba ómnibus.
+```
+
+```text
+Evalúe el poder predictivo de un modelo de regresión usando bootstrapping.
+```
+
+```text
+Reporte RMSE, MAE y R² promedio usando remuestreo bootstrap.
+```
+
+```text
+La muestra es pequeña y no se desea depender fuertemente de supuestos paramétricos.
+```
+
+```text
+Los datos presentan asimetría, outliers o dudas sobre normalidad.
+```
+
+**Regla Mental**
+
+```text
+Comparar 2 grupos independientes → bootstrap de diferencia de medias.
+
+Comparar 3+ grupos independientes → bootstrap tipo ANOVA/F.
+
+Mismas personas antes/después → bootstrap pareado.
+
+Modelo de regresión → bootstrap con caret para RMSE, R² y MAE.
+
+Si el objetivo principal es p-valor bajo H0 → considerar permutación o bootstrap centrado bajo H0.
+```
+
+La frase clave para recordar:
+
+> Bootstrap no es una prueba específica; es una estrategia de remuestreo para estimar la variabilidad de un estadístico o el desempeño de un modelo.
