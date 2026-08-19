@@ -1,0 +1,698 @@
+---
+title: "Probando"
+author: "Grupo 3"
+date: "2026-08-19"
+output: html_document
+---
+
+Comencemos Incluyendo los paquetes que usaremos en este script.
+
+```{r setup, include=FALSE}
+library(car)
+library(caret)
+library(dplyr)
+library(ggpubr)
+library(leaps)
+library(pROC)
+library(psych)
+```
+
+Obtengamos los datos en formato ancho.
+
+```{r}
+datos <- read.csv2("EP09 Datos.csv", stringsAsFactors = TRUE)
+datos[["Gender"]] <- factor(datos[["Gender"]]) #Transforma una columna, en variables CATEGORICAS.
+```
+
+Generemos las variables nuevas requeridas para este ejercicio.
+
+```{r}
+datos_ext <- datos |> 
+  mutate(TRG = ifelse(Knees.diameter < 19.0, "no", "sí"))
+datos_ext[["TRG"]] <- factor(datos_ext[["TRG"]])
+```
+
+Obtenemos la muestra como indican las instrucciones 1 y 2, teniendo cuidado de desordenar los conjuntos de datos para que no queden juntos todos los casos con la misma clase, puesto que introduce artificialmente dependencia entre los datos.
+
+```{r}
+set.seed(11111)
+muestra_a <- datos_ext |> filter(TRG == "no") |> sample_n(50, replace = FALSE)
+muestra_b <- datos_ext |> filter(TRG == "sí") |> sample_n(50, replace = FALSE)
+muestra_ext <- rbind(muestra_a, muestra_b) |> sample_frac(1L)
+```
+
+## Regresión lineal múltiple usando el paquete leaps
+
+Para cumplir la instrucción 3, buscaremos los predictores de forma exhaustiva, teniendo cuidado de indicar la variable prohibida.
+
+```{r}
+respuesta_lineal <- "Knees.diameter"
+respuesta_binaria <- "TRG"
+
+rlm1_df <- muestra_ext |> select(-all_of(respuesta_binaria))
+rlm1_fmla <- formula(paste(respuesta_lineal, ".", sep = " ~ "))
+rlm1_sets <- regsubsets(rlm1_fmla, data = rlm1_df,
+                        nbest = 3, nvmax = 8, method = "exhaustive")
+rlm1_sets_summ <- summary(rlm1_sets)
+rlm1_sets_i_mejor <- which.min(rlm1_sets_summ[["bic"]])
+rlm1_seleccion <- names(which(rlm1_sets_summ[["which"]][rlm1_sets_i_mejor, ])[-1])
+
+# Algunos ajustes gráficos para mejor visualización
+par(cex.axis = 0.6, mgp = c(2.5, 0.75, 0))
+
+plot(rlm1_sets, main = "Mejores subconjuntos (RLM 1)")
+```
+
+```{r}
+cat("Mejores predictores para el modelo de RLM 1:\n")
+print(rlm1_seleccion)
+```
+
+Vemos que hay varios subconjuntos que llevan a un BIC de alrededor de −120. El mejor subconjunto considera una variable indicadora (Gender1) que en realidad no aparece en la matriz de datos. Debemos tener cuidado de cambiarla por el nombre verdadero antes de usar este conjunto para construir el modelo. Para ello usaremos la función train() del paquete caret, indicando que use bootstrapping con B repeticiones para evitar sobreajuste, teniendo cuidado de definir una semilla para poder reproducir el mismo resultado cada vez que se ejecute el código.
+
+```{r}
+rlm1_seleccion[5] <- "Gender"
+rlm1_sel_text <- paste(rlm1_seleccion, collapse = " + ")
+rlm1_fmla <- formula(paste(respuesta_lineal, rlm1_sel_text, sep = " ~ "))
+
+B = 1999
+set.seed(11 * 11111)
+rlm1_train <- train(rlm1_fmla, data = rlm1_df, method = "lm",
+                    trControl = trainControl(method = "boot", number = B))
+rlm1 <- rlm1_train[["finalModel"]]
+
+cat("Modelo de RLM 1:\n")
+print(summary(rlm1))
+```
+  
+### Multicolinealidad
+
+Cuando los modelos tienen muchos predictores, la probabilidad de que exista multicolinealidad aumenta. Por eso, es bueno que descartemos este potencial problema tempranamente.
+
+```{r}
+cat("Factores de inflación de la varianza:\n")
+print(vif(rlm1))
+cat("\n")
+cat("Valores de tolerancia:\n")
+print(1 / vif(rlm1))
+```
+
+Vemos que el predictor Hip.Girth está relativamente cerca del límite para declarar un problema de multicolinealidad. Para jugar seguro, mejor quitemos este predictor del modelo.
+
+```{r}
+rlm1_seleccion <- rlm1_seleccion[-3]
+rlm1_sel_text <- paste(rlm1_seleccion, collapse = " + ")
+rlm1_fmla <- formula(paste(respuesta_lineal, rlm1_sel_text, sep = " ~ "))
+
+set.seed(11 * 11111)
+rlm1_train <- train(rlm1_fmla, data = rlm1_df, method = "lm",
+                    trControl = trainControl(method = "boot", number = B))
+rlm1<- rlm1_train[["finalModel"]]
+
+cat("Modelo de RLM 1 con cuatro predictores:\n")
+print(summary(rlm1))
+```
+
+¡Oh! Al quitar el predictor Hip.Girth, sin intención, el predictor Navel.Girth se volvió irrelevante para el modelo. Basados en el principio de parsimonia, quitemos también esta variable del modelo.
+
+```{r}
+rlm1_seleccion <- rlm1_seleccion[-2]
+rlm1_sel_text <- paste(rlm1_seleccion, collapse = " + ")
+rlm1_fmla <- formula(paste(respuesta_lineal, rlm1_sel_text, sep = " ~ "))
+
+set.seed(11 * 11111)
+rlm1_train <- train(rlm1_fmla, data = rlm1_df, method = "lm",
+                    trControl = trainControl(method = "boot", number = B))
+rlm1<- rlm1_train[["finalModel"]]
+
+cat("Modelo de RLM 1 con cuatro predictores:\n")
+print(summary(rlm1))
+```
+
+¡Bien! Se tiene un modelo con 3 predictores que aportan significativamente a su ajuste.
+
+Verifiquemos entonces la multicolinealidad de este modelo más reducido.
+
+```{r}
+cat("Factores de inflación de la varianza:\n")
+print(vif(rlm1))
+cat("\n")
+cat("Valores de tolerancia:\n")
+print(1 / vif(rlm1))
+```
+
+¡Bien! Ahora el modelo presenta niveles de multicolinealidad aceptables.
+
+### Ajuste, linealidad, normalidad y homocedasticidad
+
+En la salida a pantalla anterior, podemos observar que el modelo obtenido consigue una reducción significativa de la varianza no explicada (F(3,96)=92,88; p≪0,001) respecto del modelo nulo.
+
+Comprobemos ahora que los residuos cumplen las condiciones necesarias usando la función residualPlots() del paquete car. Sin embargo, las funciones de este paquete tienen problemas encontrando información usada por la función train() del paquete caret en la construcción del modelo. Por esta razón, primero creamos un modelo de la manera tradicional que es equivalente al modelo final obtenido por train().
+
+```{r}
+rlm1_equiv <- lm(rlm1_fmla, rlm1_df)
+
+par(mgp = c(1.75, 0.5, 0))
+cat("Prueba de curvatura para los predictores del modelo de RLM 1:\n")
+residualPlots(rlm1_equiv, terms = ~ 1,
+              col = "steelblue", pch = 20, col.quad = "red",
+              id = list(cex = 0.8, location = "lr"))
+title("Residuos (RLM 1)")
+```
+
+Vemos que, si bien hay un caso atípico (con etiqueta “98”), no se observan patrones problemáticos, lo que es confirmado por las pruebas de curvatura aplicadas (Z=−0,741; p=0,459). Así, no hay evidencia para sospechar que los residuos no siguen una distribución normal centrada en cero para cada predictor (aunque se ven algunos posibles valores atípicos).
+
+Revisemos que la variable de salida se relaciona linealmente con los predictores por medio del gráfico de residuos parciales que entrega la función crPlots() del paquete car.
+
+```{r}
+par(mgp = c(1.5, 0.5, 0))
+crPlots(rlm1_equiv, terms = ~ . - Gender, layout = c(1, 2),
+        col = "steelblue", pch = 20, col.lines = c("red", "steelblue"),
+        smooth = list(smoother = loessLine, span = 1),
+        id = list(cex = 0.8, location = "lr"),
+        main = "Residuos parciales (RLM 1)", ylab = "Residuos parciales")
+```
+
+Primero, notamos que las relaciones entre cada predictor y la variable respuesta son aproximadamente lineales. Segundo, el modelo (línea segmentada roja) se ajusta bien a las relaciones observadas (líneas continua azul-acero), con unas leves desviaciones en los datos más extremos que evita apalancamiento de un par de casos extremos en la variable Ankles.diameter.
+
+Tampoco se ven cambios en notorios en la varianza, lo que podemos confirmar con la prueba de varianza del error no constante.
+
+```{r}
+cat("Prueba de varianza del error no constante:\n")
+ncvTest(rlm1_equiv)
+```
+
+H0: la varianza de los errores es constante
+H1: la varianza de los errores no es constante
+
+p>0,05: no hay evidencia estadistica de Heterocedasticidad
+
+Confirmamos que no hay razones para sospechar que la condición de varianza constante no se esté cumpliendo (χ1=0,884; p=0,347).
+
+### Casos sobreinfluyentes
+
+Usemos el gráfico de diagnóstico disponible en el paquete car entregado por la función influencePlot() que ya hemos usado en ejercicios prácticos anteriores.
+
+```{r}
+par(cex = 0.9, mgp = c(1.75, 0.5, 0))
+rlm1_inf <- influencePlot(rlm1_equiv, fill.col = "steelblue",
+           ,              scale = 5, id = list(n = 15),
+                          main = "Influencia de casos (RLM 1)\n")
+```
+
+Arriba o abajo extremo → error grande
+Muy a la derecha → predictor extremo
+Círculo grande → caso influyente
+
+Ahora determinemos los umbrales a considerar.
+
+```{r}
+n_casos1 <- nrow(rlm1_df)          # Número de casos
+p_rlm1 <- length(coef(rlm1))       # Número de parámetros del modelo
+gdl_rlm1 <- n_casos1 - p_rlm1 - 1  # Grados de libertad del modelo
+
+lim_res_rlm1 <- abs(round(qt(0.05 / 2, df = gdl_rlm1), 3))
+lim_hat_rlm1 <- round(2 * mean(hatvalues(rlm1)), 3)
+lim_cook1_rlm1 <- round(mean(cooks.distance(rlm1)) +
+                             3 * sd(cooks.distance(rlm1)), 3)
+lim_cook2_rlm1 <- round(qf(0.5, df1 = p_rlm1, df2 = n_casos1 - p_rlm1), 3)
+
+cat("Límites para el modelo de RLM 1:\n")
+cat("Rango para 95% de los residuos studentizados: ")
+cat("[", -lim_res_rlm1, ", ", lim_res_rlm1, "]\n", sep = "")
+cat("Límite del apalancamiento:", lim_hat_rlm1, "\n")
+cat("Límite de sospecha para la distancia de Cook:", lim_cook1_rlm1, "\n")
+cat("Límite crítico para la distancia de Cook:", lim_cook2_rlm1, "\n")
+```
+
+Listemos los casos notorios que sobrepasan estos límites.
+
+```{r}
+rlm1_inf_filtrados <- rlm1_inf |>
+  filter(abs(StudRes) > lim_res_rlm1 |
+         Hat > lim_hat_rlm1 |
+         CookD > lim_cook1_rlm1)
+
+cat("Casos notorios para el modelo de regresión logística múltiple:\n")
+print(rlm1_inf_filtrados)
+```
+
+Ninguno de los casos notorios reportados por la función influencePlot() está fuera de rango en las tres métricas. De hecho, solo los casos 54 y 98 exhiben una distancia de Cook mayor al resto, pero muy lejos del valor crítico. Revisemos el impacto de estos casos en el modelo.
+
+```{r}
+casos <- rownames(rlm1_inf_filtrados)
+id_casos <- which(casos == "54" | casos == "98")
+
+par(mgp = c(1.75, 0.5, 0))
+mmps(rlm1_equiv, terms = ~ 1, 
+     col = "steelblue", pch = 20, col.line = c("steelblue", "red"),
+     smooth = list(smoother = loessLine, span = 1),
+     id = list(method = casos[id_casos], cex = 0.8, location = "lr"),
+     main = "Relación marginal con predicciones (RLM 1)", sub = " ")
+```
+
+Podemos ver, en esta figura y en los gráficos de residuos parciales, que ninguno de los casos potencialmente problemáticos distorsiona notoriamente la línea del modelo, por lo que no es necesario eliminar ninguna de estas observaciones.
+
+### Independencia de los residuos
+
+Confirmemos que no existe dependencia entre los residuos generados por el modelo de RLM 1.
+
+```{r}
+cat("Prueba de la independencia de los residuos para el modelo de RLM 1:\n")
+print(durbinWatsonTest(rlm1))
+```
+
+D-W cercano a 2 → no hay autocorrelación
+D-W cercano a 0 → autocorrelación positiva
+D-W cercano a 4 → autocorrelación negativa
+
+H_0: Son independientes
+H_A: Son dependientes
+(p_valor > 0,05)
+
+Vemos que no hay razones para sospechar que los residuos no sean independientes para este modelo (D-W=2,002; p=0,998).
+
+### Desempeño
+
+Veamos los niveles de error cometidos por el modelo de RLM 1 que hemos conseguido, analizando un histograma de los errores (RMSE) en cada repetición del bootstrapping y el reporte del error promedio generado por la función train().
+
+```{r}
+rlm1_err_df <- data.frame(RMSE = rlm1_train[["resample"]][["RMSE"]])
+rlm1_err_p <- gghistogram(rlm1_err_df, x = "RMSE", bins = 30,
+                          fill = "steelblue", ylab = "Frecuencia",
+                          title = "Distribución del error (RLM 1)")
+print(rlm1_err_p)
+```
+
+```{r}
+cat("Rendimiento del modelo de RLM 1:\n")
+print(rlm1_train[["results"]], digits = 3)
+cat("\nMás detalle del raíz del error cuadrático medio:\n")
+print(describe(rlm1_err_df, trim = 0, quant = c(0.25, 0.75),
+               skew = FALSE, IQR = TRUE), digits = 3)
+```
+RMSE pequeño respecto al rango de la variable → buen desempeño
+RMSE pequeño respecto a la media → buen desempeño
+MAE pequeño respecto a la escala de la variable → buen desempeño
+R² alto → buen ajuste explicativo
+
+Vemos que el error promedio que el modelo comete en sus estimaciones es de 0,681±0,080 cm, lo que es bastante bueno si consideramos que la variable de respuesta varía entre 16,0 y 21,6 cm, con una media de 18,95 cm. También podemos observar que la distribución del error es relativamente simétrica con un rango que va desde 0,408 y 0,965 cm con un rango intercuantil de 0,111 ([0,634; 0,745]).
+
+## Regresión lineal múltiple usando Recursive Feature Elimination
+
+El paquete caret implementa la regresión escalonada hacia atrás bajo el nombre de Recursive Feature Elimination (RFE), mediante la función rfe(). Se pueden definir varias alternativas de control para guíar la búsqueda, incluyendo funciones wrapper para varios tipos de modelo. En particular, caret proporciona la función wrapper lmFuncs para trabajar modelos de regresión lineal.
+
+La instrucción 4 nos indica buscar, mediante cinco repeticiones de validación cruzada de cinco pliegues, un modelo de RLM que consiga el mayor valor del coeficiente de determinación R2
+ y que incluya entre 5 y 15 predictores. Esto podemos hacerlo con el siguiente código. Como la validación cruzada divide los datos de forma aleatoria, vamos a tener el cuidado de definir una semilla para su reproducibilidad.
+
+```{r}
+rlm2_df <- muestra_ext |> select(-all_of(respuesta_binaria))
+rlm2_fmla <- formula(paste(respuesta_lineal, ".", sep = " ~ "))
+rlm2_control <- rfeControl(functions = lmFuncs, method = "repeatedcv",
+                           number = 5, repeats = 5, verbose = FALSE)
+
+set.seed(13 * 11111)
+rlm2_rfe <- rfe(rlm2_fmla, data = rlm2_df, rfeControl = rlm2_control,
+                sizes = 5:15, metric = "Rsquared")
+rlm2 <- rlm2_rfe[["fit"]]
+```
+
+Veamos una representación gráfica del proceso de búsqueda realizado.
+
+```{r}
+rlm2_rfe_p <- ggplot(rlm2_rfe) + theme_pubr()
+rlm2_rfe_p <- ggpar(rlm2_rfe_p, title = "Búsqueda RFE (RLM 2)")
+print(rlm2_rfe_p)
+```
+
+Podemos apreciar que la búsqueda obtuvo el valor del R2
+ más alto con un modelo que considera 7 variables. Veamos el modelo obtenido.
+ 
+```{r}
+cat("Modelo de RLM 2 obtenido con RFE:\n")
+print(summary(rlm2))
+```
+
+### Multicolinealidad
+
+Revisemos los niveles de multicolinealidad del modelo obtenido.
+
+```{r}
+cat("Factores de inflación de la varianza:\n")
+print(vif(rlm2))
+cat("\n")
+cat("Valores de tolerancia:\n")
+print(1 / vif(rlm2))
+```
+
+Vemos que hay varios predictores con valores de inflación de la varianza cercanos o sobre 5. La variable Wrist.Minimum.Girth es la que presenta el valor más alto, por lo que es mejor quitarla del modelo.
+
+```{r}
+rlm2_seleccion <- predictors(rlm2)[-2]
+rlm2_seleccion[1] <- "Gender"
+rlm2_sel_text <- paste(rlm2_seleccion, collapse = " + ")
+rlm2_fmla <- formula(paste(respuesta_lineal, rlm2_sel_text, sep = " ~ "))
+
+set.seed(13 * 11111)
+rlm2_train <- train(rlm2_fmla, data = rlm2_df, method = "lm",
+                    trControl = trainControl(method = "repeatedcv", number = 5, repeats = 5))
+rlm2<- rlm2_train[["finalModel"]]
+
+cat("Nuevos factores de inflación de la varianza:\n")
+print(vif(rlm2))
+cat("\n")
+cat("Nuevos valores de tolerancia:\n")
+print(1 / vif(rlm2))
+```
+
+Podemos apreciar que mejoran los valores de inflación de la varianza, aunque la variable Forearm.Girth sigue presentando un valor alto. Mejor quitarla del modelo.
+
+```{r}
+rlm2_seleccion <- rlm2_seleccion[-6]
+rlm2_sel_text <- paste(rlm2_seleccion, collapse = " + ")
+rlm2_fmla <- formula(paste(respuesta_lineal, rlm2_sel_text, sep = " ~ "))
+
+set.seed(13 * 11111)
+rlm2_train <- train(rlm2_fmla, data = rlm2_df, method = "lm",
+                    trControl = trainControl(method = "repeatedcv", number = 5, repeats = 5))
+rlm2 <- rlm2_train[["finalModel"]]
+
+cat("Nuevos factores de inflación de la varianza (2):\n")
+print(vif(rlm2))
+cat("\n")
+cat("Nuevos valores de tolerancia (2):\n")
+print(1 / vif(rlm2))
+```
+
+Vemos que ahora los predictores presentan niveles de multicolinealidad más o menos aceptables. Como el enunciado nos exige un mínimo de 5 predictores, detenemos esta poda aquí, aunque es probable que todavía haya espacio para reducir el modelo.
+
+### Ajuste y linealidad
+
+Revisemos el modelo conseguido.
+
+```{r}
+cat("Modelo de RLM 2 con cinco predictores:\n")
+print(summary(rlm2), digits = 3)
+```
+
+Observamos que el modelo consigue una reducción significa de la varianza no explicada en comparación al modelo nulo (F(5,94)=27,7; p<0,001), aunque confirmamos que hay variables que no contribuyen significativamente a este ajuste y que podrían quitarse del modelo.
+
+Revisemos el gráfico de diagnóstico de los residuos que genera este modelo (usando un modelo equivalente creado con las funciones base).
+
+```{r}
+rlm2_equiv <- lm(rlm2_fmla, rlm2_df)
+
+par(mgp = c(1.75, 0.5, 0))
+cat("Prueba de curvatura para los predictores del modelo de RLM 2:\n")
+residualPlots(rlm2_equiv, terms = ~ 1,
+              col = "steelblue", pch = 20, col.quad = "red",
+              id = list(cex = 0.8, location = "lr"))
+title("Residuos (RLM 2)")
+```
+
+Vemos que los residuos muestran el comportamiento esperado, con el mismo caso atípico observado con el modelo anterior. Esto es confirmado por la prueba de curvatura, por lo que no tenemos evidencia para creer que los residuos no siguen una distribución normal con varianza constante. Si tuviéramos dudas, podríamos confirmar con gráficos y pruebas auxiliares.
+
+```{r}
+cat("Normalidad de los residuos generados por el modelo (RLM 2):\n")
+shapiro.test(resid(rlm2))
+
+cat("\nPrueba de varianza del error no constante (RLM 2):\n")
+ncvTest(rlm2)
+```
+
+¡Oh! La prueba auxiliar rechaza la idea de que los residuos siguen una distribución normal. Pero esto podría ser efecto del (¿único?) caso atípico 98. Verifiquemos esta hipótesis.
+
+```{r}
+cat("Normalidad de los residuos sin el caso atípico (RLM 2):\n")
+shapiro.test(resid(rlm2)[-98])
+```
+
+Confirmamos que el caso 98 es el responsable de que la prueba de normalidad para los residuos del modelo resulte significativa. Pongamos atención en este valor, pues podría estar afectando la confiabilidad del modelo y ser necesario eliminarlo.
+
+Revisemos ahora la condición de linealidad entre predictores y variable de salida.
+
+```{r}
+par(cex.lab = 1.2, mgp = c(1.5, 0.5, 0))
+crPlots(rlm2_equiv, terms = ~ . - Gender,
+        col = "steelblue", pch = 20, col.lines = c("red", "steelblue"),
+        smooth = list(smoother = loessLine, span = 1),
+        id = list(cex = 1.0, location = "lr"),
+        main = "Residuos parciales (RLM 2)", ylab = "Residuos parciales")
+```
+
+Observamos que las relaciones entre cada predictor y la variable respuesta son aproximadamente lineales y que el modelo logra ajustarse bien a estos datos, con desviaciones leves en el extremo inferior de estas variables.
+
+### Casos sobreinfluyentes
+
+Revisemos el gráfico de influencia y los casos notorios que se identifican en él.
+
+```{r}
+par(cex = 0.9, mgp = c(1.5, 0.5, 0))
+rlm2_inf <- influencePlot(rlm2_equiv, fill.col = "steelblue",
+                          scale = 5, id = list(n = 15),
+                          main = "Influencia de casos (RLM 2)\n")
+```
+
+Ahora determinemos los umbrales a considerar para este modelo.
+
+```{r}
+n_casos2 <- nrow(rlm2_df)           # Número de casos
+p_rlm2 <- length(coef(rlm2))        # Número de parámetros del modelo
+gdl_rlm2 <- n_casos2 - p_rlm2 - 1   # Grados de libertad del modelo
+
+lim_res_rlm2 <- abs(round(qt(0.05 / 2, df = gdl_rlm2), 3))
+lim_hat_rlm2 <- round(2 * mean(hatvalues(rlm2)), 3)
+lim_cook1_rlm2 <- round(mean(cooks.distance(rlm2)) + 
+                        3 * sd(cooks.distance(rlm2)), 3)
+lim_cook2_rlm2 <- round(qf(0.5, df1 = p_rlm2, df2 = n_casos2 - p_rlm2), 3)
+
+cat("Límites para el modelo de RLM 2:\n")
+cat("Rango para 95% de los residuos studentizados: ")
+cat("[", -lim_res_rlm2, ", ", lim_res_rlm2, "]\n", sep = "")
+cat("Límite del apalancamiento:", lim_hat_rlm2, "\n")
+cat("Límite de sospecha para la distancia de Cook:", lim_cook1_rlm2, "\n")
+cat("Límite crítico para la distancia de Cook:", lim_cook2_rlm2, "\n")
+```
+
+Revisemos los casos notorios que sobrepasan estos límites.
+
+```{r}
+rlm2_inf_filtrados <- rlm2_inf |>
+  filter(abs(StudRes) > lim_res_rlm2 |
+         Hat > lim_hat_rlm2 |
+         CookD > lim_cook1_rlm2)
+
+cat("Casos notorios para el modelo de regresión logística múltiple:\n")
+print(rlm2_inf_filtrados)
+```
+
+A priori, ningún residuo esta fuera de rango en los tres criterios. El caso 54 presenta apalancamiento y distancia de Cook fuera de los límites, pero el caso atípico 98 es el que presenta la mayor distancia de Cook. Veamos el impacto de este último en las predicciones del modelo.
+
+```{r}
+casos <- rownames(rlm2_inf_filtrados)
+id_casos <- which(casos == "98")
+i_datos <- which(rownames(rlm2_df) %in% casos[id_casos])
+
+rlm2a <- update(rlm2_equiv, data = rlm2_df[-i_datos, ])
+
+par(mgp = c(1.5, 0.5, 0), mfrow = c(1, 2))
+invisible(mmp(rlm2_equiv,
+          col = "steelblue", pch = 20, col.line = c("steelblue", "red"),
+          smooth = list(smoother = loessLine, span = 1),
+          id = list(method = casos[id_casos], cex = 0.8, location = "lr"),
+          main = "Relación marginal (RLM 2)")
+)
+invisible(mmp(rlm2a,
+          col = "steelblue", pch = 20, col.line = c("steelblue", "red"),
+          smooth = list(smoother = loessLine, span = 1),
+          id = list(n = 3, location = "lr", cex = 0.8), 
+          main = "Relación marginal (RLM 2a)")
+)
+```
+
+realidad parece apalancar el extremo inferior del modelo. Como ejercicio académico, asumiremos que es mejor eliminar este caso atípico para conseguir un modelo que se ajuste mejor a la mayoría de los datos.
+
+### Modelo de RLM 2a
+#### Nuevo ajuste
+
+Procedamos a reentrenar el modelo sin el caso 98.
+
+```{r}
+i <- which(rownames(rlm2_df) == "98")
+rlm2a_df <- rlm2_df[-i, ]
+
+set.seed(13 * 11111)
+rlm2a_train <- train(rlm2_fmla, data = rlm2a_df, method = "lm",
+                          trControl = trainControl(method = "repeatedcv", number = 5, repeats = 5))
+rlm2a <- rlm2a_train[["finalModel"]]
+
+cat("Modelo de RLM 2 alyternativo con cinco predictores:\n")
+print(summary(rlm2a), digits = 3)
+```
+
+Vemos que en este nuevo modelo presenta un ajuste general un poco mejor (F(5,93)=35,10; p<0,001) y ahora la variable Wrists.diameter aporta significativamente a la reducción de la varianza conseguida (t(93)=2,29; p=0,024). Debe notarse que hemos fijado la misma semilla que usamos al realizar la búsqueda con la función rfe() para conseguir pliegues y repeticiones (idealmente) equivalentes.
+
+### Reevaluación de la multicolinealidad.
+
+Verificamos que seguimos sin problemas de colinealidad.
+
+```{r}
+cat("Nuevos factores de inflación de la varianza (2):\n")
+print(vif(rlm2a))
+cat("\n")
+cat("Nuevos valores de tolerancia (2):\n")
+print(1 / vif(rlm2a))
+```
+
+Seguimos con valores aceptables, similares a los que teníamos.
+
+### Reevaluación de los residuos.
+
+Revisemos los residuos nuevamente
+
+```{r}
+rlm2a_equiv <- lm(rlm2_fmla, rlm2a_df)
+
+par(mgp = c(1.5, 0.5, 0))
+cat("Prueba de curvatura para el modelo de RLM 2 alternativo:\n")
+residualPlots(rlm2a_equiv, terms = ~ 1,
+              col = "steelblue", pch = 20, col.quad = "red",
+              id = list(cex = 0.8, location = "lr"))
+title("Residuos (RLM 2a)")
+```
+
+Bien, los residuos del modelo nuevo muestran el comportamiento esperado, que podemos confirmar con las pruebas auxiliares.
+
+```{r}
+cat("Normalidad de los residuos generados por el modelo (RLM 2 alternativo):\n")
+shapiro.test(resid(rlm2a))
+
+cat("\nPrueba de varianza del error no constante (RLM 2 alternativo):\n")
+ncvTest(rlm2a)
+```
+
+Confirmamos que no hay evidencia de problemas con la normalidad ni homocedasticidad de los residuos del nuevo modelo.
+
+### Reevaluación de la condición de linealidad.
+
+Volvemos a revisar la condición de linealidad entre predictores y variable de salida.
+
+```{r}
+par(mgp = c(1.5, 0.5, 0))
+crPlots(rlm2a_equiv, terms = ~ . - Gender,
+        col = "steelblue", pch = 20, col.lines = c("red", "steelblue"),
+        smooth = list(smoother = loessLine, span = 1),
+        id = list(cex = 1.0, location = "lr"),
+        main = "Residuos parciales (RLM 2a)",
+        ylab = "Residuos parciales")
+```
+
+Confirmamos que las relaciones entre cada predictor y la variable respuesta son aproximadamente lineales y que el modelo alternativo se ajustarse bien a estos datos.
+
+### Reevaluación de casos sobreinfluyentes.
+
+Generemos el gráfico de influencia y capturemos los casos notorios para el nuevo modelo.
+
+```{r}
+par(cex = 0.9, mgp = c(1.75, 0.5, 0))
+rlm2a_inf <- influencePlot(rlm2a_equiv, fill.col = "steelblue",
+                           scale = 5, id = list(n = 15),
+                           main = "Influencia de casos (RLM 2a)\n")
+```
+
+Ahora determinemos los umbrales a considerar para este modelo.
+
+```{r}
+n_casos2a <- nrow(rlm2a_df)           # Número de casos
+p_rlm2a <- length(coef(rlm2a))        # Número de parámetros del modelo
+gdl_rlm2a <- n_casos2a - p_rlm2a - 1  # Grados de libertad del modelo
+
+lim_res_rlm2a <- abs(round(qt(0.05 / 2, df = gdl_rlm2a), 3))
+lim_hat_rlm2a <- round(2 * mean(hatvalues(rlm2a)), 3)
+lim_cook1_rlm2a <- round(mean(cooks.distance(rlm2a)) +
+                         3 * sd(cooks.distance(rlm2a)), 3)
+lim_cook2_rlm2a <- round(qf(0.5, df1 = p_rlm2a, df2 = n_casos2a - p_rlm2a), 3)
+
+cat("Límites para el modelo de RLM 2:\n")
+cat("Rango para 95% de los residuos studentizados: ")
+cat("[", -lim_res_rlm2a, ", ", lim_res_rlm2a, "]\n", sep = "")
+cat("Límite del apalancamiento:", lim_hat_rlm2a, "\n")
+cat("Límite de sospecha para la distancia de Cook:", lim_cook1_rlm2a, "\n")
+cat("Límite crítico para la distancia de Cook:", lim_cook2_rlm2a, "\n")
+```
+
+E identifiquemos los casos que sobrepasan estos límites.
+
+```{r}
+rlm2a_inf_filtrados <- rlm2a_inf |>
+  filter(abs(StudRes) > lim_res_rlm2a |
+         Hat > lim_hat_rlm2a |
+         CookD > lim_cook1_rlm2a)
+
+cat("Casos notorios para el modelo de RML 2 alternativo:\n")
+print(rlm2a_inf_filtrados)
+```
+
+Solo el caso 54 muestra estadísticas de influencia preocupantes. Revisemos su impacto en el modelo.
+
+```{r}
+casos <- rownames(rlm2a_inf_filtrados)
+id_casos <- which(casos == "54")
+i_datos <- which(rownames(rlm2a_df) %in% casos[id_casos])
+
+rlm2b <- update(rlm2a_equiv, data = rlm2a_df[-i_datos, ])
+
+par(mgp = c(1.5, 0.5, 0), mfrow = c(1, 2))
+invisible(mmp(rlm2a_equiv,
+          col = "steelblue", pch = 20, col.line = c("steelblue", "red"),
+          smooth = list(smoother = loessLine, span = 1),
+          id = list(method = casos[id_casos], cex = 0.8, location = "lr"),
+          main = "Relación marginal (RLM 2a)")
+)
+invisible(mmp(rlm2b,
+          col = "steelblue", pch = 20, col.line = c("steelblue", "red"),
+          smooth = list(smoother = loessLine, span = 1),
+          id = list(n = 3, location = "lr", cex = 0.8), 
+          main = "Relación marginal (RLM 2b)")
+)
+```
+
+Podemos ver que el caso 54, a pesar de tener estadísticas de influencia fuera de rango, en realidad no tiene una sobreinfluencia indebida en los coeficientes del modelo alternativo.
+
+### Independencia de los residuos
+
+Confirmemos que no existe dependencia entre los residuos generados por el modelo de RLM 2 obtenido.
+
+```{r}
+cat("Prueba de la independencia de los residuos para el modelo de RLM 2:\n")
+print(durbinWatsonTest(rlm2a))
+```
+
+Vemos que no hay razones para rechazar la hipótesis de que los residuos de este modelo son independientes (D-W=2,000; p=0,940).
+
+
+
+De esta forma, hemos revisado que el modelo de RLM 2 obtenido presenta un buen ajuste a los datos y es confiable (cumple las condiciones para usar modelos de regresión lineal y no hay evidencia de multicolinealidad, dependencia ni de la presencia de casos sobreinfluyentes).
+
+### Desempeño
+
+Veamos los niveles de error cometidos por el modelo de RLM 2 que hemos conseguido. Como antes, analizando un histograma de los errores (RMSE) en cada repetición, esta vez de la validación cruzada, además del reporte generado por la función train().
+
+```{r}
+rlm2_err_df <- data.frame(RMSE = rlm2a_train[["resample"]][["RMSE"]])
+rlm2_err_p <- gghistogram(rlm2_err_df, x = "RMSE", bins = 5,
+                          fill = "steelblue", ylab = "Frecuencia",
+                          title = "Distribución del error (RLM 2)")
+print(rlm2_err_p)
+```
+
+```{r}
+cat("Rendimiento del modelo de RLM 2:\n")
+print(rlm2_train[["results"]], digits = 3)
+cat("\nMás detalle de la raíz del error cuadrático medio:\n")
+print(describe(rlm2_err_df, trim = 0, quant = c(0.25, 0.75),
+               skew = FALSE, IQR = TRUE), digits = 3)
+```
+
+El modelo comete errores que van desde 0,537 y 1,041cm (0,783±0,134cm en promedio). Este resultado no es malo si consideramos que la variable de respuesta varía entre 16,0 y 21,6cm.
+
