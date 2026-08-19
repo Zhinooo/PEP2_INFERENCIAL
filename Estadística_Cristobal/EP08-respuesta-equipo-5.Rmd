@@ -1,0 +1,433 @@
+---
+title: "EP08: Métodos con remuestreo"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Librerías a utilizar
+library(dplyr)
+library(readr)
+library(ggpubr)
+library(boot)
+```
+
+```{r lectura-datos}
+datos <- read_csv("EP08 Datos CASEN 2017.csv", show_col_types = FALSE)
+```
+
+# Pregunta 1
+
+<!--
+Enunciado original:
+"Propongan una pregunta de investigación original, que involucre la comparación
+de la frecuencia en que se observa un evento o característica en dos grupos
+independientes (más abajo se dan unos ejemplos). Fijando una semilla propia,
+seleccionen una muestra aleatoria de hogares (100 < n < 150) y respondan la
+pregunta propuesta utilizando una prueba de permutaciones Monte Carlo. Deben
+reportar un intervalo de confianza para el estadístico utilizado usando las
+mismas remuestras."
+-->
+
+#### **Pregunta de investigación**
+
+¿Existe una diferencia significativa en la proporción de hogares que disponen de un computador (PC, netbook, laptop o tablet) en uso y funcionamiento entre los hogares de la Región Metropolitana de Santiago y los de la Región de La Araucanía?
+
+<br>
+<br>
+
+#### **Hipótesis**
+
+Sea $p_{RM}$ (Región Metropolitana de Santiago) y $p_A$ (Región de La Araucanía) la proporción de hogares que disponen de un computador (PC, netbook, laptop o tablet) en uso y funcionamiento de la población de hogares en ambas regiones, respectivamente. Entonces las hipótesis planteadas son:
+
+$H_0$: $p_{RM} = p_A$ La proporción de hogares que disponen de un computador en uso y funcionamiento es igual entre ambas regiones
+
+$H_A$: $p_{RM} \neq p_A$ La proporción de hogares que disponen de un computador en uso y funcionamiento es distinta entre ambas regiones.
+
+Se trabajará con un nivel de significación $\alpha = 0{,}05$.
+
+<br>
+<br>
+
+#### **Obtención y descripción de la muestra**
+
+```{r p1-muestra}
+set.seed(448) # Establece la semilla
+
+# Filtrado de datos
+datos_p1 <- datos %>%
+  filter(region %in% c("Región Metropolitana de Santiago", "Región de La Araucanía")) %>%
+  filter(r16d %in% c("Sí", "No")) %>% 
+  mutate(
+    region_txt = factor(ifelse(region == "Región Metropolitana de Santiago", "Metropolitana", "Araucanía")),
+    dispone_pc = factor(r16d, levels = c("Sí", "No"))
+  ) %>%
+  select(id.vivienda, region_txt, dispone_pc)
+
+# Obtención de la muestra aleatoria (100 < n < 150)
+n_p1 <- 125
+muestra_p1 <- datos_p1 %>% sample_n(n_p1)
+
+# Descripción de la muestra obtenida
+table(muestra_p1$region_txt, muestra_p1$dispone_pc)
+
+muestra_p1 %>%
+  group_by(region_txt) %>%
+  summarise(
+    total = n(),
+    disponen = sum(dispone_pc == "Sí"),
+    proporcion = mean(dispone_pc == "Sí")
+  )
+```
+
+```{r p1-grafico}
+# Crear un data frame con los datos exactos observados en tu muestra
+datos_grafico <- data.frame(
+  Region = c("Araucanía", "Araucanía", "Metropolitana", "Metropolitana"),
+  Disponibilidad = c("Sí", "No", "Sí", "No"),
+  Cantidad = c(33, 37, 35, 20)
+)
+
+# Gráfico de barras apiladas al 100% usando ggpubr / ggplot2
+ggbarplot(datos_grafico, 
+          x = "Region", 
+          y = "Cantidad",
+          fill = "Disponibilidad",
+          palette = c("#5DADE2", "#AEB6BF"),
+          position = position_fill(),
+          title = "Disponibilidad de PC en el Hogar según Región",
+          ylab = "Proporción (100%)",
+          legend.title = "¿Dispone de PC?") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent)
+```
+
+<br>
+<br>
+
+
+#### **Verificación de condiciones para una prueba de permutaciones**
+
+La prueba de permutaciones es un método no paramétrico de remuestreo exacto que no requiere el cumplimiento de supuestos de normalidad o tamaños muestrales mínimos por celda, los cuales son necesarios en las pruebas paramétricas tradicionales.
+
+Para que esta prueba sea válida, solo debe cumplirse la condición de intercambiabilidad: bajo la hipótesis nula ($H_0$), la etiqueta de pertenencia regional de un hogar ("Metropolitana" o "Araucanía") no influye en la probabilidad de que posea un computador en funcionamiento. Por lo tanto, cualquier asignación de las observaciones a los grupos es igualmente probable bajo la hipótesis nula, justificando que podamos permutar las etiquetas de los grupos repetidamente.
+
+<br>
+<br>
+
+#### **Estadístico de interés**
+
+El estadístico de interés seleccionado para contrastar nuestras hipótesis es la diferencia entre las proporciones muestrales de disponibilidad de computador de ambos grupos ($\hat{p}_{RM} - \hat{p}_A$).
+
+```{r p1-estadistico-observado}
+# Cálculo de proporciones observadas
+props_obs <- muestra_p1 %>%
+  group_by(region_txt) %>%
+  summarise(prop = mean(dispone_pc == "Sí"))
+
+p_RM_obs <- props_obs %>% filter(region_txt == "Metropolitana") %>% pull(prop)
+p_A_obs <- props_obs %>% filter(region_txt == "Araucanía") %>% pull(prop)
+
+# Si alguna región no quedó en la muestra (caso extremo), asignamos 0
+if(length(p_RM_obs) == 0) p_RM_obs <- 0
+if(length(p_A_obs) == 0) p_A_obs <- 0
+
+# Diferencia observada (Estadístico observado)
+dif_obs_p1 <- p_RM_obs - p_A_obs
+dif_obs_p1
+```
+
+<br>
+<br>
+
+
+#### **Prueba de permutaciones Monte Carlo**
+
+Para determinar si la diferencia observada es estadísticamente significativa, realizamos una aproximación de Monte Carlo con $B = 5999$ permutaciones. En cada iteración barajamos aleatoriamente las etiquetas de las regiones para construir la distribución nula del estadístico de interés. A partir de estas mismas permutaciones, construimos también un intervalo de confianza para la diferencia de proporciones.
+
+```{r p1-monte-carlo}
+B_p1 <- 5999
+dif_perm <- numeric(B_p1)
+
+variable_respuesta <- muestra_p1$dispone_pc
+etiquetas_grupo <- muestra_p1$region_txt
+
+set.seed(884) # Semilla interna para asegurar la reproducibilidad de las permutaciones
+for(i in 1:B_p1) {
+  # Permutación de las etiquetas de grupo
+  grupos_permutados <- sample(etiquetas_grupo)
+  
+  # Proporciones bajo permutación
+  p_RM_perm <- mean(variable_respuesta[grupos_permutados == "Metropolitana"] == "Sí")
+  p_A_perm <- mean(variable_respuesta[grupos_permutados == "Araucanía"] == "Sí")
+  
+  dif_perm[i] <- p_RM_perm - p_A_perm
+}
+
+# Cálculo del p-valor bilateral (dos colas)
+p_valor_p1 <- mean(abs(dif_perm) >= abs(dif_obs_p1))
+p_valor_p1
+
+# Intervalo de confianza al 95% para la diferencia bajo H0 usando las remuestras
+ic_perm <- quantile(dif_perm, probs = c(0.025, 0.975))
+ic_perm
+```
+
+<br>
+<br>
+
+#### **Conclusión**
+
+A partir de los resultados obtenidos mediante la prueba de permutaciones de Monte Carlo, con $B = 5999$ permutaciones y utilizando un nivel de significación de $\alpha = 0{,}05$, observamos lo siguiente:
+
+El estadístico de interés observado en nuestra muestra (diferencia de proporciones $\hat{p}_{RM} - \hat{p}_A$) es de $0{,}1649$ (es decir, una diferencia de un $16{,}49\%$ a favor de la Región Metropolitana).
+
+El $p$-valor bilateral obtenido de la simulación de Monte Carlo es de $0{,}0707$ (aproximadamente $7{,}07\%$).
+
+El intervalo de confianza al $95\%$ para la diferencia de proporciones bajo el supuesto de la hipótesis nula ($H_0$) es de $[-0{,}1922;\, 0{,}1649]$.
+
+Dado que el $p$-valor obtenido ($0{,}0707$) es mayor que nuestro nivel de significación establecido ($\alpha = 0{,}05$), no se dispone de evidencia suficiente para rechazar la hipótesis nula ($H_0$) en favor de la hipótesis alternativa ($H_A$).
+
+En consecuencia, no podemos concluir de manera estadísticamente significativa que exista una diferencia en la proporción de hogares que disponen de un computador en uso y funcionamiento entre la Región Metropolitana de Santiago y la Región de La Araucanía.
+
+---
+
+
+<br>
+<br>
+
+
+# Pregunta 2
+
+<!--
+Enunciado original:
+"Propongan una pregunta de investigación original, que involucre la comparación
+de las medias de más de dos grupos independientes (más abajo se dan unos
+ejemplos). Fijando una semilla distinta a la anterior, seleccionen una muestra
+aleatoria de hogares (200 < n < 300) y respondan la pregunta propuesta
+utilizando bootstrapping. Solo por ejercicio académico, aplique un análisis
+post-hoc con bootstrapping aunque este no fuera necesario. Indicación:
+consideren que el análisis post-hoc debe hacerse con las mismas remuestras
+usadas para la prueba ómnibus."
+-->
+
+#### **Pregunta de investigación**
+
+¿Es similar, en promedio, el ingreso total corregido del hogar (ytotcorh)
+entre hogares cuyo jefe o jefa de hogar tiene distinto nivel educacional
+alcanzado (educación básica completa, educación media completa o educación
+superior completa)?
+
+
+<br>
+<br>
+
+#### **Hipótesis**
+
+Sea $\mu_B$ (básica completa), $\mu_M$ (educación media completa)y $\mu_S$ (educación superior completa)  el ingreso total del hogar promedio de la población de hogares cuyo jefe/a de hogar tienen distintos niveles de educativo respectivamente. Entonces las hipótesis planteadas son:
+
+- $H_0$: $\mu_B = \mu_M = \mu_S$ *El ingreso total del hogar promedio es igual entre los tres grupos
+  educacionales*.
+- $H_A$: Al menos uno de los grupos educacionales tiene un ingreso total del
+  hogar promedio distinto a los demás ($\exists\, i \neq j$ tal que
+  $\mu_i \neq \mu_j$).
+
+Se trabajará con un nivel de significación $\alpha = 0{,}05$.
+
+
+<br>
+<br>
+
+
+#### **Obtención y descripción de la muestra**
+
+```{r p2-muestra}
+set.seed(2024)  # Se establece una semilla para garantizar la reproducibilidad de los datos
+
+# Se agrupan las categorías de "educ" en tres niveles educacionales y se
+# Se descartan los hogares sin nivel educacional definido o sin ingreso.
+datos_p2 <- datos %>%
+  filter(educ %in% c("Básica Compl.", "M. Hum. Completa", "M. Téc Completa",
+                      "Profesional Completo",
+                      "Técnico Nivel Superior Completo")) %>%
+  mutate(nivel_educ = case_when(
+    educ == "Básica Compl." ~ "Básica completa",
+    educ %in% c("M. Hum. Completa", "M. Téc Completa") ~ "Media completa",
+    educ %in% c("Profesional Completo",
+                "Técnico Nivel Superior Completo") ~ "Superior completa"
+  )) %>%
+  mutate(nivel_educ = factor(nivel_educ,
+                              levels = c("Básica completa", "Media completa",
+                                         "Superior completa"))) %>%
+  filter(!is.na(ytotcorh)) %>%
+  select(id.vivienda, nivel_educ, ytotcorh)
+
+# Muestra aleatoria de hogares (200 < n < 300)
+n <- 250
+muestra <- datos_p2 %>% sample_n(n)
+
+table(muestra$nivel_educ)
+
+muestra %>%
+  group_by(nivel_educ) %>%
+  summarise(media = mean(ytotcorh), sd = sd(ytotcorh), n = n())
+```
+
+```{r p2-graficos}
+# Inspección gráfica de la distribución del ingreso en cada grupo
+gghistogram(muestra, x = "ytotcorh", facet.by = "nivel_educ", bins = 20,
+            fill = "nivel_educ") +
+  ggtitle("Distribución del ingreso total del hogar según nivel educacional")
+
+ggboxplot(muestra, x = "nivel_educ", y = "ytotcorh", fill = "nivel_educ") +
+  ggtitle("Ingreso total del hogar según nivel educacional")
+```
+
+
+
+<br>
+<br>
+
+
+#### **Verificación de condiciones para una prueba paramétrica (ANOVA clásico)**
+
+```{r p2-condiciones}
+muestra %>%
+  group_by(nivel_educ) %>%
+  summarise(p_valor_shapiro = shapiro.test(ytotcorh)$p.value)
+```
+
+Tanto en los histogramas y boxplots como las pruebas de normalidad de
+Shapiro-Wilk se puede apreciar que la distribución de los ingresos de hogar en cada
+grupo cuentan con una asimetría a la derecha muy marcada, o sea que unos pocos hogares cuentan con
+ingresos muy altos, dado esta caráctiristica de asimetría no se cumple el supuesto de normalidad por lo que lo mejor es optar por un ANOVA clásico de una vía. Además, dado el marcado sesgo de
+los datos, tampoco es razonable asumir homogeneidad de varianzas entre
+grupos. Por lo anterior, por lo que concluimos que no es válido aplicar un ANOVA paramétrico y se usará un método de remuestreo (bootstrapping) que no requiere cumplir con estas características para ser aplicable.
+
+
+
+<br>
+<br>
+
+#### **Estadístico de interés**
+
+- Para la prueba ómnibus se utiliza el estadístico $F$ del ANOVA de una
+  vía (razón entre la variabilidad del ingreso promedio explicada por el
+  nivel educacional y la variabilidad dentro de cada grupo). Y para el análisis post-hoc se utilizan las diferencias de las medias
+  muestrales de ingreso entre cada par de niveles educacionales.
+
+```{r p2-estadistico-observado}
+# F observado (con los datos originales, sin remuestrear)
+aov_obs <- aov(ytotcorh ~ nivel_educ, data = muestra)
+F_obs <- summary(aov_obs)[[1]][["F value"]][1]
+F_obs
+
+# Diferencias de medias observadas entre cada par de grupos
+pares <- combn(levels(muestra$nivel_educ), 2, simplify = FALSE)
+
+medias_obs <- muestra %>%
+  group_by(nivel_educ) %>%
+  summarise(media = mean(ytotcorh))
+
+dif_obs <- sapply(pares, function(p) {
+  medias_obs$media[medias_obs$nivel_educ == p[2]] -
+    medias_obs$media[medias_obs$nivel_educ == p[1]]
+})
+names(dif_obs) <- sapply(pares, paste, collapse = " - ")
+dif_obs
+```
+
+
+
+<br>
+<br>
+
+
+#### **Bootstrapping: prueba ómnibus y análisis post-hoc**
+
+Se construye la distribución nula del estadístico $F$ mediante bootstrap:
+
+Se centra el ingreso de cada grupo restando su propia media y sumando la
+media genera, así de esta, manera las tres muestras queden con medias iguales, lo que es consistente con $H_0$, luego se remuestrea con reemplazo y dentro de
+cada grupo desde estos datos centrados. En cada una de las B réplicas
+se calcula tanto el estadístico $F$ (prueba ómnibus) como las diferencias
+de medias entre cada par de grupos (post-hoc), asegurando así que el análisis
+post-hoc usa exactamente las mismas remuestras que la prueba ómnibus.
+
+```{r p2-bootstrap}
+grupo <- muestra$nivel_educ
+y <- muestra$ytotcorh
+niveles <- levels(grupo)
+
+# Datos centrados bajo el supuesto de H0 (medias iguales entre grupos)
+media_general <- mean(y)
+y_centrado <- y - ave(y, grupo, FUN = mean) + media_general
+
+B <- 2000  # número de remuestra del bootstrap
+F_boot <- numeric(B)
+dif_boot <- matrix(NA, nrow = B, ncol = length(pares))
+
+set.seed(321)
+for (i in 1:B) {
+  y_star <- c()
+  grupo_star <- c()
+
+  # Remuestreo con reemplazo, por separado dentro de cada grupo, asi se mantener fijo el tamaño de cada grupo en cada réplica
+  for (g in niveles) {
+    y_g <- y_centrado[grupo == g]
+    y_star <- c(y_star, sample(y_g, length(y_g), replace = TRUE))
+    grupo_star <- c(grupo_star, rep(g, length(y_g)))
+  }
+  grupo_star <- factor(grupo_star, levels = niveles)
+  datos_star <- data.frame(y = y_star, grupo = grupo_star)
+
+  # Estadístico F de la remuestra (prueba ómnibus)
+  aov_star <- aov(y ~ grupo, data = datos_star)
+  F_boot[i] <- summary(aov_star)[[1]][["F value"]][1]
+
+  # Diferencias de medias de la misma remuestra (post-hoc)
+  medias_star <- tapply(y_star, grupo_star, mean)
+  dif_boot[i, ] <- sapply(pares, function(p) medias_star[p[2]] - medias_star[p[1]])
+}
+
+p_valor_omnibus <- mean(F_boot >= F_obs)
+p_valor_omnibus
+```
+
+```{r p2-posthoc}
+
+p_valores_posthoc <- sapply(seq_along(pares), function(j) {
+  mean(abs(dif_boot[, j]) >= abs(dif_obs[j]))
+})
+names(p_valores_posthoc) <- names(dif_obs)
+p_valores_posthoc
+
+# Se aplica una corrección por comparaciones múltiples (Bonferroni), ya que se están realizando tres comparaciones de a pares a partir de las mismas remuestras
+p_valores_ajustados <- p.adjust(p_valores_posthoc, method = "bonferroni")
+p_valores_ajustados
+```
+
+*La compilación del html puede tardar un poco por el Bootstrapping*
+
+#### **Conclusión**
+
+Se puede concluir con un nivel de significandia de $\alpha = 0{,}05$ y dado que el p-valor obtenido para
+la prueba ómnibus de bootstrap es menor
+que $\alpha$, que se rechaza $H_0$ en favor de $H_A$, por lo que existen
+diferencias significativas en el ingreso total del hogar promedio entre al
+menos dos de los niveles educacionales del jefe o jefa de hogar
+considerados.
+
+El análisis post-hoc con bootstrap muestra que las diferencias significativas se
+concentran en las comparaciones que involucran a los hogares con educación
+superior completa, tanto la comparación Básica completa - Superior
+completa como Media completa - Superior completa resultan ser
+significativas, por otro lado la diferencia hallada entre el nivel de educación Básica completa y
+Media completa no representa ser una diferencia significativa. En otras palabras, contar con un jefe o jefa de
+hogar con educación superior completa está asociado a un ingreso total del
+hogar promedio significativamente mayor que en los hogares donde el jefe o
+jefa de hogar tiene educación básica o media completa, pero no se observan
+diferencias significativas entre estos dos últimos grupos entre sí.
+
+

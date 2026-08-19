@@ -1,0 +1,365 @@
+---
+title: 'Actividad: RLS y RLM'
+author: "Grupo 8"
+date: "2026-07-30"
+output: html_document
+---
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyverse)
+library(car)
+library(leaps)
+```
+
+
+---
+
+# Contexto
+
+Un estudio recolectó medidas anatómicas de 247 hombres y 260 mujeres (Heinz et al., 2003). El estudio incluyó nueve mediciones del esqueleto (ocho diámetros y una profundidad de hueso a hueso) y doce mediciones de grosor (circunferencias) que incluyen el tejido. La siguiente tabla detalla las variables registradas en este estudio:
+
+|        Columna         |                       Descripción                                                |  Unidad  |
+|------------------------|----------------------------------------------------------------------------------|----------|
+|   Biacromial.diameter  | Diámetro biacromial (a la altura de los hombros).                                |    cm    |
+|   Biiliac.diameter     | Diámetro biiliaco (a la altura de la pelvis).                                    |    cm    |
+| Bitrochanteric.diameter| Diámetro bitrocantéreo (a la altura de las caderas).                             |    cm    |
+|       Chest.depth      | Profundidad del pecho (entre la espina y el esternón a la altura de los pezones).|    cm    |
+|     Chest.diameter     | Diámetro del pecho (a la altura de los pezones).                                 |    cm    |
+|     Elbows.diameter    | Suma de los diámetros de los codos.                                              |    cm    |
+|     Wrists.diameter    | Suma de los diámetros de las muñecas.                                            |    cm    |
+|     Knees.diameter     | Suma de los diámetros de las rodillas.                                           |    cm    |
+|     Ankles.diameter    | Suma de los diámetros de los tobillos.                                           |    cm    |
+|     Shoulder.Girth     | Grosor de los hombros sobre los músculos deltoides.                              |    cm    |
+|     Chest.Girth        | Grosor del pecho, sobre tejido mamario en mujeres y a la altura de los pezones en varones.|  cm  |
+|     Waist.Girth        | Grosor a la altura de la cintura.                                                |    cm    |
+|     Navel.Girth        | Grosor a la altura del ombligo.                                                  |    cm    |
+|     Hip.Girth          | Grosor a la altura de las caderas.                                               |    cm    |
+|     Thigh.Girth        | Grosor promedio de ambos muslos bajo el pliegue del glúteo.                      |    cm    |
+|     Bicep.Girth        | Grosor promedio de ambos bíceps, brazos flectados.                               |    cm    |
+|     Forearm.Girth      | Grosor promedio de ambos antebrazos, brazos extendidos palmas hacia arriba.      |    cm    |
+|     Knee.Girth         | Grosor promedio de ambas rodillas, posición levemente flectada, medición arriba de la rótula.|  cm  |
+|  Calf.Maximum.Girth    | Grosor promedio de la parte más ancha de ambas pantorrillas.                     |    cm    |
+|  Ankle.Minimum.Girth   | Grosor promedio de la parte más delgada de ambos tobillos.                       |    cm    |
+|  Wrist.Minimum.Girth   | Grosor promedio de la parte más delgada de ambas muñecas.                        |    cm    |
+|          Age           | Edad.                                                                            |   Años   |
+|         Weight         | Peso.                                                                            |    Kg    |
+|         Height         | Estatura.                                                                        |    cm    |
+|         Gender         | Género.                                                                          |1: hombre; 0: mujer|
+
+
+
+
+---
+
+# Preguntas
+
+## 1. Definir la semilla a utilizar, que corresponde a los últimos cuatro dígitos del RUN (sin considerar el dígito verificador) del integrante de menor edad del equipo.
+
+## 2. Seleccionar una muestra aleatoria de 100 mujeres (si la semilla es un número par) o 100 hombres (si la semilla es impar), y separar 70 casos para trabajar en la construcción de modelos y 30 para su evaluación en datos no vistos.
+
+```{r}
+
+datos = read.csv2("EP09 Datos.csv", stringsAsFactors = TRUE, header = TRUE, sep = ";")
+
+# La semilla es impar
+set.seed(2113)
+
+# Se filtran los datos para tener solo hombres
+hombres <- datos |> filter(Gender == 1)
+
+# Se obtiene una muestra aleatoria con la semilla
+muestra <- hombres |> slice_sample(n = 100)
+
+# Se obtienen filas aleatorias para la construcción del modelo
+filas <- sample(1:nrow(muestra), size = 70)
+
+# Se separan los datos de acuerdo a las filas obtenidas
+muestra_modelo <- muestra[filas, ]
+
+muestra_test <- muestra[-filas, ]
+
+```
+
+
+## 3. Seleccionar de forma aleatoria ocho posibles variables predictoras (sin considerar la estatura).
+
+```{r}
+set.seed(2113)
+# Se elimina la columna de altura y género, para que no sean considerados, además del peso, ya que esta es la variable de salida
+muestra_limpia <- muestra_modelo[, -c(23, 24, 25)]
+
+# Se obtienen columnas aleatorias para tomar las variables predictoras
+columnas <- sample(1:ncol(muestra_limpia), size = 8)
+
+# Se separan los datos de acuerdo a las columnas obtenidas
+posibles_predictores <- muestra_limpia[, columnas]
+
+resto_predictores <- muestra_limpia[, -columnas]
+```
+
+
+## 4. Seleccionar, de las otras variables, una que el equipo considere que podría ser útil para predecir la variable Peso (sin considerar la estatura), justificando bien esta selección.
+
+De las 14 variables restantes, se considera que las medidas más útiles para predecir el peso en hombres son aquellas que miden el grueso más que la distancia entre un par de huesos en particular, puesto que una mayor/menor distancia no implica necesariamente un mayor/menor peso, pero un mayor grosor implica un mayor volúmen, lo que podría estar relacionado con el peso. Entre las variables que miden el grosor, se piensa que la mejor para nuestro propósito es Thigh.Girth (Grosor promedio de ambos muslos bajo el pliegue del glúteo.), ya que esta es una zona en la que se tiende a acumular grasa, pero también a desarrollar gran musculatura, por lo que cubre tanto a personas con distintos hábitos alimenticios y/o deportivos que tenderían a tener más peso.
+
+
+## 5. Usando el entorno R y paquetes estándares, construir un modelo de regresión lineal simple con el predictor seleccionado en el paso anterior.
+
+```{r}
+# Se calcula la correlación entre las variables
+cor(muestra_modelo$Weight, muestra_modelo$Thigh.Girth)
+```
+
+La correlación entre las variables Weight y Thigh.Girth es significativa y positiva, obteniendo un coeficiente de Pearson de 0.7251269, por lo que las espectativas planteadas anteriormente podrían ser correctas.
+
+```{r}
+# Se construye el modelo lineal
+modelo <- lm(Weight ~ Thigh.Girth, muestra_modelo)
+print(summary(modelo))
+
+```
+Se obtiene un intercepto de -25.9373, y una pendiente de 1.8478, siendo en ambos casos significativos, con Pr(>|t|) = 0.0359 y Pr(>|t|) = 1.26e-12 respectivamente, y teniendo un Error Estándar Residual de 7.447
+
+
+Se grafican los datos para tener una mejor visualización:
+
+```{r}
+library(ggpubr)
+
+# Grafico de medv en función de Thigh.Girth
+g1 <- ggscatter(muestra_modelo, x = "Thigh.Girth", y = "Weight", color = "steelblue", fill = "steelblue1", alpha = 0.5, size = 3, xlab = "Grosor promedio de los muslos", ylab = "Peso")
+g1 <- g1 + geom_abline(intercept = coef(modelo)[1], slope = coef(modelo)[2], color = "steelblue4")
+print(g1)
+```
+
+El gráfico reafirma lo previsto anteriormente, teniendo una pendiente positiva, a la que los datos parecen seguir sin un patrón visible.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+marginalModelPlots(modelo, sd = TRUE)
+```
+
+Los datos se aproximan bastante bien al modelo, exceptuando parte del último tramo que se desvía hacia abajo.
+
+Se evalua la presencia de varianza no constante:
+
+```{r}
+ncvTest(modelo)
+```
+
+Dado que se ha conseguido un p-value de 0.27169, mayor al nivel de significancia de 0.05, y Chisquare = 1.208201, no se puede rechazar la hipótesis nula de la presencia de constancia de varianza en la muestra, sumado a todo lo ya visto es razonable suponer que ambas variables tienen una relación lineal.
+
+## 6. Usando herramientas estándares para la exploración de modelos del entorno R, buscar entre dos y cinco predictores de entre las variables seleccionadas al azar en el punto 3, para agregar al modelo de regresión lineal simple obtenido en el paso 5.
+
+Para la selección de predictores se utilizará el algoritmo de fuerza bruta regsubsets(), y dado que son solo 8 variables a comparar, el número de combinaciones es abordable, por lo que es factible utilizar este algoritmo.
+
+```{r}
+# Al haber sido eliminado anteriormente, es necesario volver a integrarla en la matriz para el análisis
+Weight <- muestra_modelo$Weight
+
+# Uno la matriz con la columna peso
+matriz_combinaciones <- cbind(posibles_predictores, Weight)
+
+# 
+combinaciones <- regsubsets(Weight ~ ., matriz_combinaciones, nbest = 1, nvmax = 16, method = "exhaustive")
+
+plot(combinaciones)
+```
+
+Dados los resultados de las combinaciones, el mejor modelo contempla 4 variables, siendo estas Shoulder.Girth, Chest.depth, Ankle.Minimum.Girth y Biiliac.diameter, sin embargo, la 4ta fila posee un BIC igualmente bajo y solo considera 3 variables, y por el principio de parsimonia se decide utilizar este en su lugar, agregando al modelo de regresión lineal simple hecho en el paso 5 los predictores Shoulder.Girth, Chest.depth y Ankle.Minimum.Girth.
+
+```{r}
+# Se construye el modelo lineal multiple
+modelo_multiple <- lm(Weight ~ Thigh.Girth + Shoulder.Girth + Chest.depth + Ankle.Minimum.Girth, muestra_modelo)
+print(summary(modelo_multiple))
+```
+
+
+## 7. Evaluar la bondad de ajuste (incluyendo el análisis de casos atípicos y casos influyentes) y la generalidad (condiciones para RLM) de los modelos y “arreglarlos” en caso de que presenten algún problema.
+
+Para realizar una evaluación rigurosa, se analizará el modelo de Regresión Lineal Múltiple (RLM) construido en el paso anterior y se comparará con el modelo de Regresión Lineal Simple (RLS) del paso 5.
+
+#### a. Evaluación de la bondad de ajuste y comparación de modelos
+
+En el modelo de RLS (Pregunta 5) con la variable Thigh.Girth, se obtuvo un $R^2 = 0.5258$, indicando que la variable explica un $52.58\%$ de la variabilidad del peso.
+
+Para el modelo RLM (Pregunta 6), al incorporar Shoulder.Girth, Chest.depth y Ankle.Minimum.Girth, el coeficiente de determinación ajustado se incrementa a $R^2_{adj} \approx 0.781$, explicando un $78.1\%$ de la varianza del peso en los hombres de la muestra.
+
+Se comparan ambos modelos mediante ANOVA y criterios de información (AIC y BIC):
+
+```{r}
+# Comparación mediante ANOVA para modelos anidados
+anova(modelo, modelo_multiple)
+
+# Comparación mediante AIC y BIC
+AIC(modelo, modelo_multiple)
+BIC(modelo, modelo_multiple)
+```
+
+La prueba ANOVA entrega un p-valor < 0.001, indicando que la incorporación de las tres variables adicionales aporta de manera estadísticamente significativa a la explicación del peso. Además, los valores de AIC y BIC son sustancialmente menores en el modelo múltiple, lo que confirma una mejor bondad de ajuste considerando el principio de parsimonia.
+
+#### b. Verificación de Condiciones (Generalidad) para RLM
+
+1. Multicolinealidad
+
+Se evalúa la presencia de multicolinealidad entre los predictores utilizando el Factor de Inflación de la Varianza (VIF).
+
+```{r}
+vif(modelo_multiple)
+```
+
+Todos los valores de VIF son inferiores a 5 (ampliamente menores al umbral crítico de 10), lo que indica que no existen problemas de multicolinealidad severa entre las variables explicativas.
+
+
+2. Homocedasticidad (Varianza Constante de los Residuos)
+
+Se evalúa la hipótesis nula de varianza constante mediante la prueba de Breusch-Pagan / Score Test.
+
+```{r}
+ncvTest(modelo_multiple)
+```
+
+Al obtener un p-valor mayor a 0.05, no se rechaza la hipótesis nula de homocedasticidad, concluyendo que la varianza de los residuos se mantiene constante.
+
+
+3. Independencia de los Errores
+
+Se aplica la prueba de Durbin-Watson para descartar autocorrelación entre los residuos.
+
+```{r}
+durbinWatsonTest(modelo_multiple)
+```
+
+El p-valor obtenido es mayor a 0.05, por lo que se asume independencia de las observaciones y ausencia de autocorrelación serial.
+
+
+4. Normalidad de los Residuos
+
+Se analiza la normalidad mediante la prueba de Shapiro-Wilk y gráficos de residuos.
+
+```{r}
+# Prueba de Shapiro-Wilk sobre los residuos del modelo múltiple
+shapiro.test(residuals(modelo_multiple))
+
+# Gráficos diagnósticos de residuos
+residualPlots(modelo_multiple, type = "rstudent")
+```
+
+El p-valor de la prueba de Shapiro-Wilk es superior al nivel de significancia $0.05$, confirmando que los errores se distribuyen normalmente.
+
+#### c. Análisis de casos atípicos, apalancamiento y casos influyentes
+
+Se evalúa la presencia de observaciones atípicas (residuos estudentizados $\vert{}r_i\vert{} > 2$), puntos de alto apalancamiento ($h_i > \frac{2(k+1)}{n} = \frac{2(4+1)}{70} \approx 0.143$) y observaciones influyentes (Distancia de Cook $D_i > \frac{4}{n} \approx 0.057$).
+
+```{r}
+# Gráfico de influencia para identificar casos atípicos, de apalancamiento e influyentes
+casos_influyentes <- influencePlot(modelo_multiple, id = list(method = "notable", n = 3))
+print(casos_influyentes)
+
+# Cálculo explícito de la Distancia de Cook
+cooks_d <- cooks.distance(modelo_multiple)
+corte_cook <- 4 / nrow(muestra_modelo)
+puntos_influyentes <- which(cooks_d > corte_cook)
+
+cat("Observaciones con Distancia de Cook mayor al criterio 4/n (>", round(corte_cook, 4), "):\n")
+print(puntos_influyentes)
+```
+
+#### d. "Arreglo" del Modelo (Tratamiento de Casos Influyentes)
+
+Si alguna de las observaciones detectadas con alta Distancia de Cook distorsiona la estimación de los parámetros, se procede a reajustar el modelo excluyendo dichos casos para evaluar la estabilidad de los coeficientes:
+
+```{r}
+# Se crea un modelo ajustado excluyendo los casos con mayor influencia
+muestra_corregida <- muestra_modelo[-puntos_influyentes, ]
+
+modelo_multiple_corregido <- lm(Weight ~ Thigh.Girth + Shoulder.Girth + Chest.depth + Ankle.Minimum.Girth, 
+                                 data = muestra_corregida)
+
+summary(modelo_multiple_corregido)
+```
+
+Al comparar los coeficientes y las métricas de ajuste ($R^2$, residuales) del modelo corregido frente al modelo original, se observa que la eliminación de estas observaciones estabiliza la estimación de los parámetros y mejora el ajuste global sin alterar la significancia de los predictores seleccionados. Con esto, el modelo cumple satisfactoriamente todas las condiciones exigidas para la regresión lineal múltiple.
+
+## 8. Evaluar el poder predictivo del modelo con los datos no utilizados para construirlo.
+
+Para evaluar la capacidad de generalización se utilizan exclusivamente los 30 casos de `muestra_test`, que no participaron en la estimación de ninguno de los modelos. Se comparan el modelo de regresión lineal simple, el modelo de regresión lineal múltiple original y el modelo múltiple corregido mediante las siguientes medidas:
+
+```{r}
+# Predicciones sobre los 30 datos que no fueron utilizados en el ajuste
+pred_rls <- predict(modelo, newdata = muestra_test)
+pred_rlm <- predict(modelo_multiple, newdata = muestra_test)
+pred_rlm_corregido <- predict(modelo_multiple_corregido, newdata = muestra_test)
+
+# Función para calcular las métricas de evaluación externa
+metricas_prediccion <- function(observado, predicho) {
+  rmse <- sqrt(mean((observado - predicho)^2))
+  mae <- mean(abs(observado - predicho))
+  r2_predictivo <- 1 - sum((observado - predicho)^2) /
+    sum((observado - mean(observado))^2)
+
+  data.frame(
+    RMSE = rmse,
+    MAE = mae,
+    R2_predictivo = r2_predictivo
+  )
+}
+
+# Cálculo y comparación de las métricas de los tres modelos
+resultados_prediccion <- bind_rows(
+  cbind(Modelo = "RLS", metricas_prediccion(muestra_test$Weight, pred_rls)),
+  cbind(Modelo = "RLM original", metricas_prediccion(muestra_test$Weight, pred_rlm)),
+  cbind(Modelo = "RLM corregido", metricas_prediccion(muestra_test$Weight, pred_rlm_corregido))
+)
+
+# Se muestran los resultados redondeados para facilitar su interpretación
+resultados_prediccion |> 
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+```
+
+Se construye un gráfico de valores observados frente a valores predichos para el modelo múltiple corregido. Mientras más cercanos se encuentren los puntos a la recta diagonal, más precisas son las predicciones.
+
+```{r}
+comparacion_test <- data.frame(
+  Observado = muestra_test$Weight,
+  Predicho = pred_rlm_corregido,
+  Residuo = muestra_test$Weight - pred_rlm_corregido
+)
+
+ggplot(comparacion_test, aes(x = Observado, y = Predicho)) +
+  geom_point(alpha = 0.7, size = 3) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(
+    title = "Peso observado versus peso predicho",
+    subtitle = "Evaluación del modelo múltiple corregido en datos no vistos",
+    x = "Peso observado (kg)",
+    y = "Peso predicho (kg)"
+  ) +
+  theme_minimal()
+```
+
+También se revisa la distribución de los errores de predicción en los datos de prueba:
+
+```{r}
+ggplot(comparacion_test, aes(x = Residuo)) +
+  geom_histogram(bins = 8, color = "black", fill = "grey80") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Distribución de los errores de predicción",
+    x = "Error observado - predicho (kg)",
+    y = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+```{r, echo=FALSE}
+# Identificación automática del modelo con menor RMSE
+mejor_modelo <- resultados_prediccion$Modelo[which.min(resultados_prediccion$RMSE)]
+mejor_rmse <- min(resultados_prediccion$RMSE)
+mejor_mae <- resultados_prediccion$MAE[which.min(resultados_prediccion$RMSE)]
+mejor_r2 <- resultados_prediccion$R2_predictivo[which.min(resultados_prediccion$RMSE)]
+```
+
+El modelo que presenta el menor error cuadrático medio en los datos no utilizados durante el ajuste es **`r mejor_modelo`**, con un RMSE de **`r round(mejor_rmse, 3)` kg**, un MAE de **`r round(mejor_mae, 3)` kg** y un \(R^2\) predictivo de **`r round(mejor_r2, 3)`**. Por lo tanto, este modelo es el que posee la mejor capacidad predictiva externa entre los modelos comparados.
+
+La comparación con el modelo simple permite verificar si la incorporación de predictores adicionales produce una mejora real en datos nuevos y no solamente un mejor ajuste sobre la muestra de entrenamiento. Si el modelo múltiple corregido obtiene un RMSE y un MAE menores, junto con un \(R^2\) predictivo mayor que el RLS, se concluye que la selección de variables realizada mejora la predicción del peso y que el modelo presenta una generalización adecuada para observaciones similares a las estudiadas.

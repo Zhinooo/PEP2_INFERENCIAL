@@ -1,0 +1,205 @@
+---
+title: "EP10"
+author: "Grupo 3"
+date: "2026-08-01"
+output: html_document
+---
+
+
+# 1. 
+Asegurando reproducibilidad, seleccionar una muestra de 150 mujeres (si su n° de equipo es un número par) o 150 hombres (si su n° de equipo es impar), asegurando que la mitad tenga estado nutricional “sobrepeso” y la otra mitad “no sobrepeso” en cada caso. Dividir esta muestra en dos conjuntos: los datos de 100 personas (50 con EN “sobrepeso”) para utilizar en la construcción de los modelos y 50 personas (25 con EN “sobrepeso”) para poder evaluarlos.
+```{r}
+set.seed(21)
+
+datos = read.csv2("EP09 Datos.csv", stringsAsFactors = TRUE)
+
+# somos grupo 3, por lo que "150 hombres (si su n° de equipo es impar)"
+library(dplyr)
+
+datos_hombre = filter(datos, Gender == 1)
+
+datos_hombre$IMC = datos_hombre$Weight / ((datos_hombre$Height / 100)^2)
+
+datos_sobrepeso = filter(datos_hombre, 23.2 <= Weight / ((Height/100)**2))
+datos_no_sobrepeso = filter(datos_hombre, 23.2 > Weight / ((Height/100)**2))
+
+# creo la variable dicotómica EN
+datos_sobrepeso$EN = 1
+datos_no_sobrepeso$EN = 0
+
+
+datos_sobrepeso_muestra = slice_sample(datos_sobrepeso, n = 75)
+datos_no_sobrepeso_muestra = slice_sample(datos_no_sobrepeso, n = 75)
+
+
+datos_entrenamiento = rbind(datos_sobrepeso_muestra[1:50, ],  datos_no_sobrepeso_muestra[1:50, ])
+datos_entrenamiento = datos_entrenamiento[sample(nrow(datos_entrenamiento)), ]
+
+datos_prueba = rbind(datos_sobrepeso_muestra[51:75, ], datos_no_sobrepeso_muestra[51:75, ])
+datos_prueba = datos_prueba[sample(nrow(datos_prueba)), ]
+
+```
+
+
+# 2. 
+Recordar las ocho posibles variables predictoras seleccionadas de forma aleatoria en el ejercicio anterior.
+"Ankle.Minimum.Girth"     "Bicep.Girth"             "Chest.depth"             "Knee.Girth"              "Biiliac.diameter"       
+"Chest.Girth"             "Bitrochanteric.diameter" "Age"   
+
+
+# 3. 
+
+https://www.tandfonline.com/doi/full/10.1080/10691898.2003.11910711 (https://www.tandfonline.com/doi/full/10.1080/10691898.2003.11910711)
+
+https://www.mdpi.com/2072-6643/16/17/2874 (Body Size Measurements Grouped Independently of Common Clinical Measures of Metabolic Health: An Exploratory Factor Analysis
+)
+
+https://www.nmcd-journal.com/article/S0939-4753(22)00173-9/fulltext (BMI is dead; long live waist-circumference indices: But which index should we choose to predict cardio-metabolic risk?
+)
+
+https://scielo.isciii.es/pdf/renhyd/v28n2/2174-5145-renhyd-28-02-124.pdf (Correlación entre CUN-BAE, índice de masa corporal y circunferencia de cintura en adultos chilenos: resultados de la Encuesta Nacional de Salud 2016-2017)
+
+
+De las variables que no fueron seleccionadas aleatoriamente, se decidió utilizar Waist.Girth (circunferencia cintura). Elegida porque, según una revisión rápida de la literatura, la circunferencia de cintura ha sido utilizada como una medida relacionada con el estado nutricional y el sobrepeso con distintos trabajos muestran que presenta una relación con el IMC, por lo que parece pertinente evaluar si también resulta útil para predecir la variable EN en este conjunto de datos.
+
+
+# 4. 
+Usando el entorno R, construir un modelo de regresión logística con el predictor seleccionado en el paso anterior y utilizando de la muestra obtenida.
+```{r}
+
+modelo_una_variable = glm(EN ~ Waist.Girth, data = datos_entrenamiento, family = binomial)
+
+summary(modelo_una_variable)
+```
+
+El modelo de regresión logística mostró que Waist.Girth tiene un coeficiente positivo y estadísticamente significativo (p = 5.22e-06), lo que sugiere una asociación entre un mayor perímetro de cintura y una mayor probabilidad de presentar sobrepeso. Además, la deviancia residual 104.00 fue menor que la deviancia nula 138.63, indicando un mejor ajuste del modelo respecto a uno sin predictores. El AIC obtenido fue 108.00, que servirá para comparar con modelos más complejos.
+
+# 5. 
+Usando herramientas estándares1 para la exploración de modelos del entorno R, buscar entre dos y cinco predictores de entre las variables seleccionadas al azar, recordadas en el punto 2, para agregar al modelo obtenido en el paso 4.
+
+```{r}
+modelo_completo = glm(EN ~ Waist.Girth + Ankle.Minimum.Girth + Bicep.Girth + Chest.depth + Knee.Girth + Biiliac.diameter + Chest.Girth + Bitrochanteric.diameter + Age, data = datos_entrenamiento, family = binomial)
+
+modelo_nulo = glm(EN ~ 1, data = datos_entrenamiento, family = binomial)
+
+modelo_escalonado = step(modelo_nulo, scope = list(upper = modelo_completo))
+
+summary(modelo_escalonado)
+```
+El modelo inicial con Waist.Girth tenía un AIC de 108.00. Durante el proceso se agregaron Bicep.Girth y Bitrochanteric.diameter, llegando a un AIC de 90.966. Por lo tanto, el modelo obtenido quedó formado por Waist.Girth y dos predictores seleccionados de las variables aleatorias.
+
+Aunque Bitrochanteric.diameter presenta un valor p mayor que 0,05, la función step() la mantuvo porque eliminarla aumentaba el AIC de 90.966 a 93.000. Por esta razón, se conservó dentro del modelo seleccionado.
+
+
+
+# 6. 
+Evaluar la confiabilidad y generalidad de los modelos (i.e. que tengan un buen nivel de ajuste, que cumplen las condiciones para RLogit y no están dominados por casos sobreinfluyentes) y “arreglarlos” en caso de que tengan algún problema.
+
+### Bondad de ajuste
+
+```{r}
+library(car)
+
+# bondad de ajuste
+
+# comparar el modelo de una variable con el modelo nulo
+anova(modelo_nulo, modelo_una_variable, test = "LRT")
+```
+Se compara el modelo nulo con el modelo de una variable usando LRT. El resultado fue p = 3.9 × 10^-9, indicando una mejora significativa al incluir Waist.Girth.
+
+```{r}
+# evaluar si agregar los dos predictores mejora el modelo inicial
+anova(modelo_una_variable, modelo_escalonado, test = "LRT")
+```
+Se compara el modelo de una variable con el modelo escalonado usando LRT. El resultado fue p = 2.702e-05, indicando que al incluir Bicep.Girth y Bitrochanteric.diameter (incluyendo Waist.Girth) mejora significativamente el modelo 
+
+```{r}
+# comparar los AIC
+AIC(
+  modelo_nulo,
+  modelo_una_variable,
+  modelo_escalonado
+)
+```
+El modelo nulo obtuvo un AIC de 140.629, el modelo de una variable obtuvo 108.004 y el modelo escalonado obtuvo 90.966. Como el modelo escalonado presenta el menor AIC, se considera que ofrece el mejor equilibrio entre ajuste y cantidad de predictores, por lo que se selecciona como modelo final.
+### Linealidad
+
+```{r}
+# Gráficos y pruebas de curvatura
+residualPlots(modelo_escalonado, fitted = FALSE)
+
+# Gráficos de residuos parciales
+crPlots(modelo_escalonado)
+```
+Los valores p de Waist.Girth (0.5519), Bicep.Girth (0.8075) y Bitrochanteric.diameter (0.6708) fueron mayores que 0.05. Por lo tanto, no se encontró evidencia de relaciones no lineales entre los predictores y la respuesta transformada. Los gráficos de residuos parciales tampoco mostraron curvaturas pronunciadas.
+
+
+### independencia de los residuos
+```{r}
+
+durbinWatsonTest(modelo_escalonado)
+```
+La prueba de Durbin-Watson entregó un estadístico de 2.3113 y un valor p de 0.126. Como el valor p es mayor que 0.05, no se encontró evidencia de autocorrelación entre los residuos. Por lo tanto, no existen indicios suficientes para cuestionar la condición de independencia de los residuos.
+
+### Multicolinealidad
+```{r}
+vif(modelo_escalonado)
+```
+Los valores VIF obtenidos para los tres predictores fueron cercanos a 1: Waist.Girth = 1.43, Bicep.Girth = 1.06 y Bitrochanteric.diameter = 1.49. Por lo tanto, no se observa evidencia de multicolinealidad fuerte entre los predictores del modelo.
+### tamaño muestral
+```{r}
+n_entrenamiento = nrow(datos_entrenamiento)
+n_predictores = 3
+
+cat("Observaciones en entrenamiento:", n_entrenamiento, "\n")
+cat("Predictores numéricos en el modelo:", n_predictores, "\n")
+cat("Observaciones por predictor:", n_entrenamiento / n_predictores, "\n")
+```
+Con 100 observaciones de entrenamiento y tres predictores numéricos, se cuenta con aproximadamente 33.3 observaciones por predictor. Este valor se encuentra por encima del mínimo sugerido en la lectura, por lo que la cantidad de información parece suficiente para construir el modelo.
+
+### Separación perfecta
+```{r}
+summary(modelo_escalonado)$coefficients
+```
+No aparecieron advertencias relacionadas con falta de convergencia o probabilidades ajustadas numéricamente iguales a 0 o 1. Además, los errores estándar no resultaron desproporcionadamente grandes respecto de los coeficientes. Por lo tanto, no se observan señales claras de separación perfecta.
+### casos influyentes
+```{r}
+influencePlot(modelo_escalonado)
+```
+El gráfico de influencia destacó las observaciones 43, 49, 73 y 82 como casos que conviene revisar. Las observaciones 49 y 73 presentaron residuos studentizados de 2.56 y -2.13, respectivamente, cuyos valores absolutos son superiores a 2. Las observaciones 43 y 82 mostraron valores de apalancamiento de 0.113 y 0.135, relativamente mayores que los demás casos identificados.
+
+Sin embargo, las distancias de Cook fueron 0.013 para la observación 43, 0.138 para la 49, 0.104 para la 73 y 0.136 para la 82. Estos valores son bajos y no indican que alguna observación esté modificando de manera excesiva el ajuste del modelo.
+
+Por lo tanto, aunque existen algunas observaciones que conviene revisar por sus residuos o apalancamiento, no se encontró evidencia de que el modelo esté dominado por casos sobreinfluyentes. En consecuencia, no fue necesario eliminar observaciones ni reconstruir el modelo.
+
+# 7. 
+Usando código estándar, evaluar el poder predictivo de los modelos con los datos de las 50 personas que no se incluyeron en su construcción en términos de sensibilidad y especificidad.
+
+```{r}
+# probabilidades del modelo de una variable sobre los datos de prueba
+prob_una_variable = predict(modelo_una_variable, newdata = datos_prueba, type = "response")
+pred_una_variable = factor(ifelse(prob_una_variable >= 0.5, 1, 0), levels = c(0, 1))
+
+# probabilidades del modelo escalonado sobre los datos de prueba
+prob_escalonado = predict(modelo_escalonado, newdata = datos_prueba, type = "response")
+pred_escalonado = factor(ifelse(prob_escalonado >= 0.5, 1, 0), levels = c(0, 1))
+
+EN_prueba = factor(datos_prueba$EN, levels = c(0, 1))
+```
+
+```{r}
+library(caret)
+
+matriz_una_variable = confusionMatrix(pred_una_variable, EN_prueba, positive = "1")
+matriz_una_variable
+```
+
+```{r}
+matriz_escalonado = confusionMatrix(pred_escalonado, EN_prueba, positive = "1")
+matriz_escalonado
+```
+Al evaluar ambos modelos con los datos de las 50 personas no utilizadas en su construcción (25 "sobrepeso" y 25 "no sobrepeso"), se obtuvo que el modelo de una variable Waist.Girth alcanzó una sensibilidad de 0.76 y una especificidad de 0.80 (exactitud = 0.78). El modelo escalonado de Waist.Girth + Bicep.Girth + Bitrochanteric.diameter obtuvo la misma sensibilidad (0.76) pero una especificidad más alta de 0.88 (exactitud = 0.82).
+
+Esto indica que ambos modelos identifican de manera igual de efectiva a las personas con sobrepeso (mismo número de verdaderos positivos), pero el modelo escalonado es un poco mejor detectando a las personas sin sobrepeso, ya que solo clasificó mal a 3 de 25 casos "no sobrepeso" (especificidad 0.88), frente a 5 de 25 del modelo de una variable (especificidad 0.80). Esta mejora en especificidad, junto con el aumento de la exactitud general de 0.78 a 0.82, indica que el modelo escalonado presentó un mejor desempeño predictivo en el conjunto de prueba.
+
+Por lo tanto, el modelo escalonado presentó un desempeño predictivo ligeramente mejor en los datos no utilizados para su construcción. Considerando también su menor AIC y los resultados de las pruebas de confiabilidad, se selecciona este modelo por sobre el modelo de una variable.

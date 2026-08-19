@@ -1,0 +1,171 @@
+---
+title: "EP09"
+author: "Grupo 3"
+date: "2026-07-31"
+output: html_document
+---
+
+```{r}
+# 1. "Definir la semilla a utilizar, que corresponde a los últimos cuatro dígitos del RUN (sin considerar el dígito verificador) del integrante de menor edad del equipo."
+set.seed(1369)
+
+# 2 "Seleccionar una muestra aleatoria de 100 mujeres (si la semilla es un número par) o 100 hombres (si la semilla es impar), y separar 70 casos para trabajar en la construcción de modelos y 30 para su evaluación en datos no vistos."
+
+datos = read.csv2("EP09 Datos.csv", stringsAsFactors = TRUE)
+
+library(dplyr)
+
+datos_hombre = filter(datos, Gender == 1)
+
+datos_hombre_sample = slice_sample(datos_hombre, n = 100)
+
+# 70 para entrenamiento
+datos_entrenamiento = datos_hombre_sample[1:70,]
+
+# 30 para prueba
+datos_prueba = datos_hombre_sample[71:100,]
+
+
+# 3. "Seleccionar de forma aleatoria ocho posibles variables predictoras (sin considerar la estatura)."
+variables_aleatorias = setdiff(names(datos_entrenamiento), c("Gender", "Height", "Weight"))
+print(variables_aleatorias)
+
+
+
+```
+```{r}
+variables_random_8 = sample(variables_aleatorias, size = 8)
+print(variables_random_8)
+```
+
+
+```{r}
+# 4. Seleccionar, de las otras variables, una que el equipo considere que podría ser útil para predecir la variable Peso (sin considerar la estatura), justificando bien esta selección.
+
+# Respecto a las variables seleccionadas aleatoriamente, se decidio agregar ademas a la variable "Waist.Girth" ya que esta medida tiene relacion directa con el tamaño y la composicion corporal, entonces por eso podria ayudar a predecir el peso.
+
+variables_candidatas = c(variables_random_8, "Waist.Girth")
+print(variables_candidatas)
+```
+
+
+```{r}
+# 5. Usando el entorno R y paquetes estándares1, construir un modelo de regresión lineal simple con el predictor seleccionado en el paso anterior.
+modelo_lineal_simple = lm(Weight ~ Waist.Girth, data = datos_entrenamiento)
+
+summary(modelo_lineal_simple)
+
+```
+El predictor Waist.Girth presenta un efecto estadísticamente significativo sobre Weight, con un valor p menor que 0,001. El modelo explica aproximadamente el 64,9 % de la variabilidad observada en el peso con error estándar residual es de aprox 6.701 kg. Por lo tanto, Waist.Girth constituye un predictor útil, aunque todavía queda una proporción importante de variabilidad sin explicar.
+
+
+```{r}
+# 6. Usando herramientas estándares1 para la exploración de modelos del entorno R, buscar entre dos y cinco predictores de entre las variables seleccionadas al azar en el punto 3, para agregar al modelo de regresión lineal simple obtenido en el paso 5.
+
+modelo_multiple = lm(Weight ~ Waist.Girth + Ankle.Minimum.Girth + Bicep.Girth + Chest.depth + Knee.Girth + Biiliac.diameter + Chest.Girth + Bitrochanteric.diameter + Age, data = datos_entrenamiento)
+
+modelo_nulo = lm(Weight ~ 1, data = datos_entrenamiento)
+
+modelo_final = step(modelo_nulo, scope = list(upper = modelo_multiple))
+
+summary(modelo_final)
+```
+
+El modelo presenta un R-squared de 0.9316 y un R-squared ajustado de 0.9251. Esto indica que permite explicar aproximadamente el 92.51 % de la variabilidad observada en el peso. Además, el error estándar residual es de aproximadamente 3.072 kg, menor que los 6.70 kg obtenidos con el modelo lineal simple.
+
+Los predictores Waist.Girth, Knee.Girth, Age, Chest.Girth y Bitrochanteric.diameter presentan valores p menores que 0.05. Chest.depth presenta un valor p de 0.0834, pero se mantiene porque el procedimiento step() determinó que eliminarla aumentaba el AIC de 163.77 a 165.13.
+
+
+```{r}
+# 7. Evaluar la bondad de ajuste (incluyendo el análisis de casos atípicos y casos influyentes) y la generalidad (condiciones para RLM) de los modelos y “arreglarlos” en caso de que presenten algún problema.
+
+# para asegurar que nuestro modelo cumple los supuestos (condiciones que tiene que cumplir una regresion lineal; linealidad, independencia de errores, homocedasticidad, normalidad de residuos... Y además que no haya observaciones que dominen el ajuste. todo este analisis para corregir)
+
+library(car)
+
+# Casos atípicos
+outlierTest(modelo_final)
+
+# Casos influyentes
+influencePlot(modelo_final)
+
+# multicolinealidad
+vif(modelo_final)
+
+```
+
+La prueba de casos atípicos no detectó residuos studentizados significativos después de aplicar la corrección de Bonferroni. No obstante, las observaciones 19 y 40 presentan residuos studentizados con un valor absoluto ligeramente superior a 2, por lo que se mantienen como casos que conviene revisar, aunque no existe evidencia suficiente para eliminarlas.
+
+vif nos dice (factor de inflación de la varianza); cuánto se infla la incertidumbre del coeficiente de un predictor porque ese predictor puede explicarse linealmente mediante los demás predictores (multicolinealidad). Esto puede volver inestables los coeficientes y reducir la capacidad de generalización del modelo.
+
+La lectura entrega explícitamente estos rangos:
+
+* VIF = 1: sin multicolinealidad.
+* 1 < VIF ≤ 5: multicolinealidad moderada, generalmente no preocupante.
+* 5 < VIF ≤ 10: multicolinealidad preocupante.
+* VIF > 10: multicolinealidad severa.
+
+Los valores VIF se encuentran entre 1,47 y 3,96. De acuerdo con los criterios presentados en la lectura, estos valores corresponden a una multicolinealidad moderada, la cual generalmente no representa un problema importante para el modelo. Por esta razón, no se consideró necesario realizar modificaciones por este motivo.
+
+El gráfico de influencia identificó las observaciones 19, 40, 55 y 57 como casos que conviene revisar. Las observaciones 19 y 40 presentan residuos studentizados con un valor absoluto ligeramente superior a 2, mientras que las observaciones 55 y 57 destacan por tener características que podrían influir más en el ajuste del modelo. Sin embargo, ninguna distancia de Cook supera el valor de referencia 1 y, además, la prueba de Bonferroni no detectó casos atípicos significativos. Por ello, no se eliminaron observaciones, aunque se reconoce que estos casos podrían ejercer cierta influencia sobre el ajuste.
+
+
+```{r}
+# revisar los supuestos
+
+# linealidad
+residualPlots(modelo_final)
+
+# normalidad y comportamiento
+marginalModelPlots(modelo_final, sd = TRUE)
+
+# homocedasticidad
+cat("homocedasticidad ---")
+ncvTest(modelo_final)
+
+# independencia de errores
+durbinWatsonTest(modelo_final)
+```
+Sobre la linealidad, la función residualPlots entregó valores p mayores a 0.05 para todos los predictores, y la prueba de tukey dio un p-valor de 0.1950. Con esto, no hay evidencia suficiente para cuestionar el supuesto de linealidad. La prueba ncvTest arrojó un p-valor de 0.2345, por lo que no se observa evidencia de varianza no constante, por lo que el supuesto de homocedasticidad no se ve cuestionado. La prueba de D-W entregó un estadístico de 2.1068 y un p-valor de 0.716, sin evidencia de autocorrelación entre los residuos (de cada observacion/persona). A partir de los gráficos, no se observan desviaciones importantes en la distribución de los residuos que permitan cuestionar el supuesto de normalidad. De acuerdo con las pruebas e inspección gráfica, no se identifican incumplimientos graves de los supuestos del modelo.
+
+
+```{r}
+# 8. "Evaluar el poder predictivo del modelo con los datos no utilizados para construirlo."
+
+
+# se utilizan los 30 casos reservados de prueba evaluar la capacidad de generalización del modelo donde se comparan los valores predichos por el modelo con los valores reales de Weight y se calculan medidas de error.
+
+# obtener predicciones con el conjunto de prueba
+peso_estimado = predict(modelo_final, newdata = datos_prueba)
+
+# se comparara con los valores reales
+comparacion = data.frame(real = datos_prueba$Weight, PesoEstimado = peso_estimado)
+
+comparacion
+
+```
+
+
+
+```{r}
+# analizar cuanto se equivoca el modelo
+
+error_modelo = datos_prueba$Weight - peso_estimado
+
+# RMSE
+rmse_prueba = sqrt(mean(error_modelo^2))
+rmse_prueba
+```
+Al evaluar el modelo con los datos de prueba, se obtuvo un RMSE de 4.0334 kg, lo que indica que, en promedio, las predicciones se desvían unos 4 kilos del valor real en datos no usados para entrenar.
+
+
+```{r}
+# medir que tan bien el modelo ajusta los datos que ya conociamos
+rmse_entrenamiento = sqrt(mean(resid(modelo_final)^2))
+
+rmse_entrenamiento
+rmse_prueba
+```
+El RMSE con los datos de entrenamiento fue de 2.91 kg, mientras que con los datos de prueba fue de 4.03 kg. Esto muestra que el modelo se equivoca un poco más cuando trabaja con datos nuevos. Aun así, la diferencia entre ambos resultados no es tan grande segun lo visto con la variable "comparacion", por lo que el modelo mantiene un nivel parecido al predecir datos que no fueron usados para construirlo.
+
+

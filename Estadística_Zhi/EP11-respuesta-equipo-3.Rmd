@@ -1,0 +1,519 @@
+---
+title: "EP11-respuesta-equipo-3"
+author: "Grupo 3"
+date: "2026-08-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = TRUE)
+```
+
+# 1.
+Definir la semilla a utilizar, que corresponde a los primeros cinco dígitos del RUN del integrante de mayor edad del equipo.
+
+```{r}
+set.seed(21336)
+```
+
+La semilla utilizada es 21336, correspondiente a los primeros cinco dígitos del RUN del integrante de mayor edad.
+
+
+# 2.
+Seleccionar una muestra de 100 personas, asegurando que la mitad tenga estado nutricional "sobrepeso" y la otra mitad "no sobrepeso".
+
+```{r}
+library(dplyr)
+
+datos <- read.csv2("EP09 Datos.csv", stringsAsFactors = TRUE)
+
+# Crear las variables IMC y EN.
+# EN = 1 corresponde a sobrepeso y EN = 0 a no sobrepeso.
+datos$IMC <- datos$Weight / ((datos$Height / 100)^2)
+datos$EN <- ifelse(datos$IMC >= 23.2, 1, 0)
+
+datos_sobrepeso <- filter(datos, EN == 1)
+datos_no_sobrepeso <- filter(datos, EN == 0)
+
+muestra_sobrepeso <- slice_sample(datos_sobrepeso, n = 50)
+muestra_no_sobrepeso <- slice_sample(datos_no_sobrepeso, n = 50)
+
+muestra <- rbind(muestra_sobrepeso, muestra_no_sobrepeso)
+muestra <- muestra[sample(nrow(muestra)), ]
+
+# se verificar tamaño y balance de la muestra.
+nrow(muestra)
+table(muestra$EN)
+```
+La muestra tiene 100 observaciones y queda balanceada con 50 personas con sobrepeso y 50 sin sobrepeso.
+
+# 3.
+Usando las herramientas del paquete leaps, realizar una búsqueda exhaustiva para seleccionar entre dos y ocho predictores que ayuden a estimar la variable Peso (Weight), obviamente sin considerar las nuevas variables IMC ni EN, y luego utilizar las funciones del paquete caret para construir un modelo de regresión lineal múltiple con los predictores escogidos y evaluarlo usando bootstrapping.
+
+```{r}
+library(leaps)
+
+# Variables predictoras
+predictoras <- names(muestra)[!names(muestra) %in% c("Weight", "IMC", "EN")]
+
+formula_completa <- as.formula(paste("Weight ~", paste(predictoras, collapse = " + ")))
+
+busqueda <- regsubsets(formula_completa, data = muestra, nbest = 1, nvmax = 8, method = "exhaustive")
+
+resumen <- summary(busqueda)
+```
+
+```{r}
+data.frame(
+  n_predictores = 2:8,
+  R2_adj = round(resumen$adjr2[2:8], 4),
+  BIC = round(resumen$bic[2:8], 2)
+)
+```
+
+
+Se realizó una búsqueda exhaustiva evaluando modelos con entre 2 y 8 predictores. El modelo con 8 predictores obtuvo el mayor R² ajustado (0.9780), el menor BIC (-348.81). Los predictores seleccionados fueron: Biiliac.diameter, Chest.depth, Elbows.diameter, Shoulder.Girth, Waist.Girth, Thigh.Girth, Calf.Maximum.Girth y Height.
+
+
+## Modelo de regresión lineal múltiple con bootstrapping
+
+```{r}
+library(caret)
+
+formula_modelo <- Weight ~ Biiliac.diameter + Chest.depth + Elbows.diameter + Shoulder.Girth + Waist.Girth + Thigh.Girth + Calf.Maximum.Girth + Height
+
+set.seed(21336)
+
+control <- trainControl(method = "boot", number = 2000)
+
+modelo_boot <- train(
+  formula_modelo,
+  data = muestra,
+  method = "lm",
+  trControl = control
+)
+
+modelo_boot
+```
+
+```{r}
+summary(modelo_boot$finalModel)
+```
+
+El modelo de regresión lineal múltiple ajustado con los 8 predictores seleccionados obtuvo un R² ajustado de 0.978 en los datos de entrenamiento, y todos los coeficientes resultaron estadísticamente significativos (p < 0.01). Mediante bootstrapping con 2000 remuestras, se obtuvo un RMSE promedio de 2.16, un R² promedio de 0.973 y un MAE promedio de 1.65. La similitud entre las métricas del modelo ajustado y las estimaciones bootstrap indica que el modelo generaliza adecuadamente y no presenta señales claras de sobreajuste.
+
+##4.
+Haciendo un poco de investigación sobre el paquete caret, en particular cómo hacer Recursive Feature Elimination (RFE), construir un modelo de regresión lineal múltiple para predecir la variable IMC que incluya entre 10 y 20 predictores, seleccionando el conjunto de variables que maximice R2 y que use cinco repeticiones de validación cruzada de cinco pliegues para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura ni estado nutricional –Weight, Height, EN respectivamente).
+```{r}
+
+## Selección de predictores mediante RFE
+
+# Variables predictoras: se excluyen Weight, Height y EN 
+predictoras_imc <- names(muestra)[!names(muestra) %in% c("Weight", "Height", "EN", "IMC")]
+
+x_imc <- muestra[, predictoras_imc]
+y_imc <- muestra[["IMC"]]
+
+# caret comienza RFE ajustando primero un modelo con todos los predictores.
+# Esta pequeña modificación obliga a que el tamaño finalmente escogido
+# quede dentro del intervalo pedido en el enunciado: 10 a 20 variables.
+funciones_imc <- lmFuncs
+funciones_imc$selectSize <- function(x, metric, maximize) {
+  x <- x[x$Variables %in% 10:20, , drop = FALSE]
+  pickSizeBest(x, metric, maximize)
+}
+
+set.seed(21336)
+control_rfe <- rfeControl(
+  functions = lmFuncs,
+  method = "repeatedcv",
+  number = 5,
+  repeats = 5
+)
+
+rfe_imc <- rfe(
+  x = x_imc,
+  y = y_imc,
+  sizes = 10:20,
+  rfeControl = control_rfe,
+  metric = "Rsquared"
+)
+
+rfe_imc
+```
+Mediante RFE se evaluaron modelos con entre 10 y 20 predictores utilizando validación cruzada de cinco pliegues repetida cinco veces. El conjunto seleccionado estuvo compuesto por 19 predictores, ya que obtuvo el mayor R2
+promedio durante el proceso de validación cruzada, con un valor de 0.8078. Este modelo presentó además un RMSE de 1.420 y un MAE de 1.082.
+ 
+```{r}
+# Cantidad óptima de predictores
+rfe_imc$optsize
+
+# Variables seleccionadas
+predictors(rfe_imc)
+```
+RFE seleccionó 19 variables predictoras, variables con mayor importancia Gender, Wrists.diameter, Wrist.Minimum.Girth, Knees.diameter y Ankle.Minimum.Girth.
+```{r}
+# Modelo final
+summary(rfe_imc$fit)
+```
+En conjunto, los resultados indican una buena capacidad para explicar y predecir el IMC, mientras que el uso de validación cruzada repetida permite obtener una estimación más realista de su desempeño predictivo y reducir el riesgo de sobreajuste.
+
+
+```{r}
+resultado_imc <- rfe_imc$results[
+  rfe_imc$results$Variables == rfe_imc$optsize,
+]
+
+resultado_imc
+```
+
+RFE seleccionó `r rfe_imc$optsize` predictores. En la validación cruzada de cinco pliegues repetida cinco veces, este tamaño obtuvo un R^2 promedio de `r round(resultado_imc$Rsquared, 4)`, un RMSE de `r round(resultado_imc$RMSE, 3)` y un MAE de `r round(resultado_imc$MAE, 3)`.
+
+El modelo ajustado con todos los datos puede presentar un R^2 mayor que el obtenido durante la validación cruzada. Para evaluar su capacidad predictiva se considera principalmente el resultado del remuestreo, porque cada pliegue evalúa observaciones que no fueron usadas para ajustar el modelo de ese pliegue.
+
+# 5.
+Usando RFE, construir un modelo de regresión logística múltiple para EN que incluya entre dos y seis predictores, seleccionando el conjunto que entregue la mejor curva ROC y utilizando validación cruzada dejando uno fuera (LOOCV). No se consideran Weight, Height ni IMC.
+
+La documentación de caret señala que RFE evalúa distintos tamaños de subconjuntos de predictores mediante remuestreo. También indica que LOOCV deja una observación fuera en cada iteración. Como una curva ROC necesita reunir observaciones de las dos clases, primero usamos RFE para obtener los subconjuntos candidatos y después calculamos el ROC usando todas las predicciones obtenidas al dejar una observación fuera.
+
+Referencia consultada:
+https://topepo.github.io/caret/recursive-feature-elimination.html
+https://topepo.github.io/caret/model-training-and-tuning.html
+
+```{r}
+library(caret)
+library(pROC)
+
+predictoras_en <- names(muestra)[
+  !names(muestra) %in% c("Weight", "Height", "IMC", "EN")
+]
+
+x_en <- muestra[, predictoras_en]
+
+y_en <- factor(
+  ifelse(muestra$EN == 1, "Sobrepeso", "No_sobrepeso"),
+  levels = c("Sobrepeso", "No_sobrepeso")
+)
+
+table(y_en)
+```
+
+Se vuelve a representar EN como una variable categórica porque en esta parte se trabaja con un problema de clasificación. Al revisar la tabla se mantienen las 50 observaciones de cada estado nutricional de la muestra original.
+
+## RFE con LOOCV
+
+```{r, warning=FALSE}
+set.seed(21336)
+
+control_rfe_en <- rfeControl(
+  functions = lrFuncs,
+  method = "LOOCV",
+  returnResamp = "all"
+)
+
+rfe_en <- rfe(
+  x = x_en,
+  y = y_en,
+  sizes = 2:6,
+  rfeControl = control_rfe_en,
+  metric = "Accuracy"
+)
+
+rfe_en
+```
+
+En este paso se usa Accuracy solamente para que RFE pueda realizar la eliminación recursiva con LOOCV. No se usa todavía para elegir el modelo final, porque el enunciado pide escogerlo según la curva ROC.
+
+```{r}
+rfe_en$variables
+```
+
+A partir de los resultados de RFE se obtiene un conjunto de variables para cada tamaño entre dos y seis predictores. Como los rankings pueden cambiar entre las iteraciones de validación, se usa la importancia promedio de cada predictor para representar cada tamaño.
+
+```{r}
+variables_por_tamano <- lapply(2:6, function(k) {
+
+  importancia_k <- rfe_en$variables[
+    rfe_en$variables$Variables == k,
+  ]
+
+  promedio_k <- aggregate(
+    Overall ~ var,
+    data = importancia_k,
+    FUN = mean
+  )
+
+  promedio_k <- promedio_k[
+    order(promedio_k$Overall, decreasing = TRUE),
+  ]
+
+  head(promedio_k$var, k)
+})
+
+names(variables_por_tamano) <- 2:6
+
+variables_por_tamano
+```
+
+## Evaluación de los subconjuntos mediante ROC y LOOCV
+
+Para comparar los cinco tamaños se repite LOOCV de forma explícita. En cada iteración se ajusta el modelo con 99 personas y se obtiene la probabilidad estimada para la persona que quedó fuera. Al terminar se tienen 100 predicciones obtenidas sobre observaciones que no participaron en el ajuste correspondiente y con ellas se calcula la curva ROC.
+
+```{r}
+resultados_en <- data.frame(
+  Variables = 2:6,
+  ROC = NA,
+  Sens = NA,
+  Spec = NA
+)
+
+predicciones_en <- list()
+
+for (k in 2:6) {
+
+  predictores_k <- variables_por_tamano[[as.character(k)]]
+  probabilidades <- numeric(nrow(muestra))
+
+  for (i in 1:nrow(muestra)) {
+
+    entrenamiento <- muestra[-i, ]
+    prueba <- muestra[i, , drop = FALSE]
+
+    formula_k <- as.formula(
+      paste(
+        "EN ~",
+        paste(predictores_k, collapse = " + ")
+      )
+    )
+
+    modelo_k <- glm(
+      formula_k,
+      data = entrenamiento,
+      family = binomial
+    )
+
+    probabilidades[i] <- predict(
+      modelo_k,
+      newdata = prueba,
+      type = "response"
+    )
+  }
+
+  curva_k <- roc(
+    response = muestra$EN,
+    predictor = probabilidades,
+    levels = c(0, 1),
+    direction = "<",
+    quiet = TRUE
+  )
+
+  corte_k <- coords(
+    curva_k,
+    x = "best",
+    ret = c("sensitivity", "specificity"),
+    transpose = FALSE
+  )
+
+  resultados_en$ROC[resultados_en$Variables == k] <-
+    as.numeric(auc(curva_k))
+
+  resultados_en$Sens[resultados_en$Variables == k] <-
+    as.numeric(corte_k$sensitivity)
+
+  resultados_en$Spec[resultados_en$Variables == k] <-
+    as.numeric(corte_k$specificity)
+
+  predicciones_en[[as.character(k)]] <- probabilidades
+}
+
+resultados_en
+```
+
+Ahora sí se comparan los modelos usando el criterio pedido en el enunciado: el área bajo la curva ROC.
+
+```{r}
+mejor_n_en <- resultados_en$Variables[
+  which.max(resultados_en$ROC)
+]
+
+predictores_en <- variables_por_tamano[[as.character(mejor_n_en)]]
+
+resultado_en <- resultados_en[
+  resultados_en$Variables == mejor_n_en,
+]
+
+mejor_n_en
+predictores_en
+resultado_en
+```
+
+El mejor modelo utiliza `r mejor_n_en` predictores: `r paste(predictores_en, collapse = ", ")`.
+
+Su evaluación mediante LOOCV obtuvo un área bajo la curva ROC de `r round(resultado_en$ROC, 4)`, una sensibilidad de `r round(resultado_en$Sens, 4)` y una especificidad de `r round(resultado_en$Spec, 4)`.
+
+```{r}
+formula_en <- as.formula(
+  paste(
+    "EN ~",
+    paste(predictores_en, collapse = " + ")
+  )
+)
+
+modelo_en <- glm(
+  formula_en,
+  data = muestra,
+  family = binomial
+)
+
+summary(modelo_en)
+```
+
+El modelo final se vuelve a ajustar utilizando las 100 observaciones y solamente los predictores seleccionados. Sin embargo, para pronunciarnos sobre su poder predictivo se consideran principalmente los resultados de LOOCV anteriores, ya que fueron calculados dejando fuera la observación que se estaba prediciendo.
+
+
+# 6.
+Pronunciarse sobre la confiabilidad y el poder predictivo de los modelos obtenidos.
+
+En los capítulos de regresión se distingue entre obtener un buen ajuste y comprobar que el modelo puede generalizar. Por eso revisamos las condiciones de los modelos y, por separado, las métricas obtenidas mediante remuestreo.
+
+## 6.1. Modelo para predecir Weight
+
+```{r}
+library(car)
+
+modelo_peso <- lm(formula_modelo, data = muestra)
+
+summary(modelo_peso)
+```
+
+Primero se revisan las condiciones utilizadas en la lectura para un modelo de regresión lineal múltiple.
+
+```{r}
+residualPlots(modelo_peso,fitted = TRUE)
+
+ncvTest(modelo_peso)
+
+set.seed(21336)
+durbinWatsonTest(modelo_peso)
+
+vif(modelo_peso)
+
+influencePlot(modelo_peso)
+```
+
+Para interpretar estos resultados seguimos los criterios utilizados en los capítulos de regresión. Si los valores p de las pruebas de curvatura son mayores que 0,05, no encontramos evidencia suficiente para cuestionar la linealidad. De forma parecida, un valor p mayor que 0,05 en `ncvTest()` no entrega evidencia de varianza no constante, mientras que Durbin-Watson permite revisar la independencia de los residuos.
+
+Respecto de la multicolinealidad, en la lectura se utiliza VIF como indicador: valores cercanos a 1 son favorables y valores altos indican que los predictores comparten demasiada información. El gráfico de influencia permite revisar si alguna observación está dominando de manera importante el ajuste.
+
+```{r}
+summary(modelo_boot$resample[, c("RMSE", "Rsquared", "MAE")])
+
+modelo_boot$results
+```
+
+Para evaluar el poder predictivo no nos quedamos solamente con el R² del modelo ajustado. El bootstrap vuelve a construir y evaluar el modelo sobre diferentes remuestras. Por eso consideramos el RMSE, R² y MAE entregados por `caret` como una estimación más realista de su desempeño.
+
+```{r}
+nrow(muestra) / 8
+```
+
+El modelo utiliza 8 predictores con 100 observaciones, es decir, alrededor de 12,5 observaciones por predictor. Esto se encuentra dentro de la guía aproximada de 10 a 15 observaciones por predictor mencionada en la lectura, por lo que inicialmente no vemos un problema importante por este lado.
+
+Con los resultados obtenidos anteriormente, el modelo presentó un R² bootstrap cercano a 0,973 y un RMSE cercano a 2,16. Estos resultados sugieren una buena capacidad predictiva para Weight en esta muestra. De todas formas, esta conclusión debe mantenerse junto con los resultados de los diagnósticos anteriores y no solamente con el R².
+
+En el modelo de Weight no se encuentra evidencia de heterocedasticidad según ncvTest (p = 0.603), ni de autocorrelación según Durbin-Watson (p = 0.796). Sin embargo, las pruebas de curvatura muestran resultados significativos para algunos predictores y para la prueba de Tukey, por lo que la condición de linealidad no se cumple completamente. El VIF máximo es cercano a 5.23, indicando cierta multicolinealidad que conviene considerar. A pesar de estas limitaciones, el desempeño obtenido mediante bootstrap es alto, con un R² de 0.974 y RMSE de 2.168.
+
+
+## 6.2. Modelo para predecir IMC
+
+```{r}
+predictores_imc <- predictors(rfe_imc)
+
+formula_imc <- as.formula(paste("IMC ~", paste(predictores_imc, collapse = " + ")))
+
+modelo_imc <- lm(formula_imc, data = muestra)
+
+summary(modelo_imc)
+```
+
+Se repite un diagnóstico parecido al utilizado para Weight, ya que nuevamente estamos trabajando con regresión lineal múltiple.
+
+```{r}
+linealidad_imc <- residualPlots(modelo_imc, fitted = TRUE, plot = FALSE)
+
+linealidad_imc
+
+ncvTest(modelo_imc)
+
+set.seed(21336)
+durbinWatsonTest(modelo_imc)
+
+vif(modelo_imc)
+
+influencePlot(modelo_imc)
+```
+
+Estos resultados se interpretan de la misma forma que en el modelo anterior: se revisa si aparece evidencia de no linealidad, varianza no constante, dependencia de los residuos, multicolinealidad importante o casos muy influyentes.
+
+```{r}
+resultado_imc
+
+summary(rfe_imc$resample[, c("RMSE", "Rsquared", "MAE")])
+
+nrow(muestra) / rfe_imc$optsize
+```
+
+En este caso RFE seleccionó `r rfe_imc$optsize` predictores. Con 100 observaciones esto corresponde aproximadamente a `r round(nrow(muestra) / rfe_imc$optsize, 2)` observaciones por predictor.
+
+Este valor queda bajo la recomendación aproximada de 10 a 15 observaciones por predictor presentada en la lectura. Por lo tanto, aunque la validación cruzada entregó un R² promedio de `r round(resultado_imc$Rsquared, 4)` y un RMSE de `r round(resultado_imc$RMSE, 3)`, consideramos que este modelo debe interpretarse con más precaución que el modelo de Weight.
+
+La validación cruzada repetida ayuda a disminuir el riesgo de evaluar el modelo solamente sobre los mismos datos con que fue construido, pero no elimina el problema de tener una cantidad alta de predictores para una muestra de solamente 100 personas.
+
+Para el modelo de IMC aparecen más dificultades. Se observan pruebas de curvatura significativas, además ncvTest resulta significativo (p < 0.001), por lo que existe evidencia de heterocedasticidad. También aparecen valores VIF superiores a 10 en varios predictores, indicando problemas de multicolinealidad. Durbin-Watson, en cambio, no entrega evidencia de autocorrelación (p = 0.624). Por esto, aunque la validación cruzada muestra una capacidad predictiva relativamente buena, con R² = 0.808, el modelo debe utilizarse con mayor precaución.
+
+## 6.3. Modelo logístico para predecir EN
+
+Para la regresión logística revisamos el ajuste del modelo, la multicolinealidad, los casos influyentes y su capacidad de discriminación mediante la curva ROC obtenida anteriormente.
+
+```{r}
+modelo_nulo_en <- glm(EN ~ 1,data = muestra,family = binomial)
+
+summary(modelo_en)
+
+anova(modelo_nulo_en,modelo_en,test = "Chisq")
+
+AIC(modelo_nulo_en, modelo_en)
+```
+
+La comparación con el modelo nulo permite revisar si incorporar los predictores mejora significativamente el ajuste. Además, comparamos el AIC, donde un valor menor favorece al modelo que obtiene un mejor equilibrio entre ajuste y complejidad.
+
+```{r}
+vif(modelo_en)
+
+influencePlot(modelo_en)
+
+modelo_en$converged
+```
+
+También revisamos VIF y posibles observaciones influyentes. Además, comprobamos que el algoritmo haya convergido correctamente antes de interpretar el modelo.
+
+Finalmente retomamos las métricas obtenidas mediante LOOCV:
+
+```{r}
+resultado_en
+```
+
+El modelo seleccionado obtuvo un ROC de `r round(resultado_en$ROC, 4)`, sensibilidad de `r round(resultado_en$Sens, 4)` y especificidad de `r round(resultado_en$Spec, 4)`.
+
+Como estas probabilidades fueron obtenidas dejando cada vez una observación fuera del ajuste, consideramos que entregan una mejor idea del poder predictivo del modelo que evaluar nuevamente las mismas 100 observaciones utilizadas para construir el modelo final.
+
+
+## Conclusión general
+
+El modelo para predecir Weight presenta el desempeño más fuerte de los modelos lineales obtenidos. La búsqueda exhaustiva seleccionó 8 predictores y el bootstrap entregó un R² cercano a 0,973 y un RMSE cercano a 2,16. Además, la cantidad de observaciones por predictor se mantiene dentro de la referencia aproximada entregada por la lectura. Su confiabilidad final depende de que los diagnósticos de residuos, multicolinealidad e influencia no muestren problemas importantes.
+
+El modelo de IMC también consigue un buen desempeño durante la validación cruzada, pero requiere una cantidad mucho mayor de predictores. Al quedar con aproximadamente cinco observaciones por predictor, consideramos que existe una limitación importante para su generalidad, aunque las métricas predictivas obtenidas sean buenas.
+
+Para EN, el modelo se selecciona comparando directamente el área bajo la curva ROC de los subconjuntos de dos a seis predictores. El uso de LOOCV permite que cada observación sea evaluada por un modelo que no la utilizó durante ese ajuste. Por ello, el ROC, la sensibilidad y la especificidad obtenidos son las medidas principales para pronunciarnos sobre su capacidad predictiva.
+
+En general, los tres modelos muestran capacidad predictiva dentro de la muestra estudiada, pero no tienen el mismo grado de confiabilidad. El modelo de Weight parece ser el más sólido, mientras que el modelo de IMC requiere mayor precaución por la relación entre tamaño muestral y número de predictores. En el caso de EN, la conclusión depende principalmente del ROC obtenido mediante LOOCV y de que los diagnósticos del modelo logístico no indiquen problemas importantes.

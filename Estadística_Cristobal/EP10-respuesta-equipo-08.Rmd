@@ -1,0 +1,324 @@
+---
+title: 'Actividad: regresión logística'
+author: "Grupo 8"
+date: "2026-08-01"
+output: html_document
+---
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggpubr)
+library(leaps)
+library(car)
+```
+
+
+---
+
+# Contexto
+
+Un estudio recolectó medidas anatómicas de 247 hombres y 260 mujeres (Heinz et al., 2003). El estudio incluyó nueve mediciones del esqueleto (ocho diámetros y una profundidad de hueso a hueso) y doce mediciones de grosor (circunferencias) que incluyen el tejido. La siguiente tabla detalla las variables registradas en este estudio:
+
+|        Columna         |                       Descripción                                                |  Unidad  |
+|------------------------|----------------------------------------------------------------------------------|----------|
+|   Biacromial.diameter  | Diámetro biacromial (a la altura de los hombros).                                |    cm    |
+|   Biiliac.diameter     | Diámetro biiliaco (a la altura de la pelvis).                                    |    cm    |
+| Bitrochanteric.diameter| Diámetro bitrocantéreo (a la altura de las caderas).                             |    cm    |
+|       Chest.depth      | Profundidad del pecho (entre la espina y el esternón a la altura de los pezones).|    cm    |
+|     Chest.diameter     | Diámetro del pecho (a la altura de los pezones).                                 |    cm    |
+|     Elbows.diameter    | Suma de los diámetros de los codos.                                              |    cm    |
+|     Wrists.diameter    | Suma de los diámetros de las muñecas.                                            |    cm    |
+|     Knees.diameter     | Suma de los diámetros de las rodillas.                                           |    cm    |
+|     Ankles.diameter    | Suma de los diámetros de los tobillos.                                           |    cm    |
+|     Shoulder.Girth     | Grosor de los hombros sobre los músculos deltoides.                              |    cm    |
+|     Chest.Girth        | Grosor del pecho, sobre tejido mamario en mujeres y a la altura de los pezones en varones.|  cm  |
+|     Waist.Girth        | Grosor a la altura de la cintura.                                                |    cm    |
+|     Navel.Girth        | Grosor a la altura del ombligo.                                                  |    cm    |
+|     Hip.Girth          | Grosor a la altura de las caderas.                                               |    cm    |
+|     Thigh.Girth        | Grosor promedio de ambos muslos bajo el pliegue del glúteo.                      |    cm    |
+|     Bicep.Girth        | Grosor promedio de ambos bíceps, brazos flectados.                               |    cm    |
+|     Forearm.Girth      | Grosor promedio de ambos antebrazos, brazos extendidos palmas hacia arriba.      |    cm    |
+|     Knee.Girth         | Grosor promedio de ambas rodillas, posición levemente flectada, medición arriba de la rótula.|  cm  |
+|  Calf.Maximum.Girth    | Grosor promedio de la parte más ancha de ambas pantorrillas.                     |    cm    |
+|  Ankle.Minimum.Girth   | Grosor promedio de la parte más delgada de ambos tobillos.                       |    cm    |
+|  Wrist.Minimum.Girth   | Grosor promedio de la parte más delgada de ambas muñecas.                        |    cm    |
+|          Age           | Edad.                                                                            |   Años   |
+|         Weight         | Peso.                                                                            |    Kg    |
+|         Height         | Estatura.                                                                        |    cm    |
+|         Gender         | Género.                                                                          |1: hombre; 0: mujer|
+
+Para este ejercicio usaremos los datos de medidas anatómicas recolectados por Heinz et al. (2003) que ya conocimos en el ejercicio práctico anterior (disponibles en el archivo "EP09 Datos.csv"). Como en este caso se requiere de una variable dicotómica, vamos a realizar lo siguiente:
+
+1. El equipo crea la variable IMC (índice de masa corporal) como el peso de una persona (en kilogramos) dividida por el cuadrado de su estatura (en metros).
+
+2. Si bien esta variable se usa para clasificar a las personas en varias clases de estado nutricional (bajo peso, normal, sobrepeso, obesidad, obesidad mórbida), para efectos de este ejercicio, usaremos dos clases: sobrepeso (IMC ≥ 23,2) y no sobrepeso (IMC < 23,2).
+
+3. El equipo crea la variable dicotómica EN (estado nutricional) de acuerdo al valor de IMC de cada persona.
+
+
+```{r}
+
+datos = read.csv2("EP09 Datos.csv", stringsAsFactors = TRUE, header = TRUE, sep = ";")
+
+# Se calcula el IMC con el peso y la altura en metros
+IMC <- datos$Weight/(datos$Height/100)^2
+
+# Variable dicotómica
+EN <- if_else(IMC >= 23.2, 1, 0)
+
+# Uno la tabla con las nuevas columnas
+datos <- cbind(datos, IMC, EN)
+```
+
+
+---
+
+# Preguntas
+
+Ahora podemos construir un modelo de regresión logística para predecir la variable EN, de acuerdo con las siguientes instrucciones:
+
+## 1. Asegurando reproducibilidad, seleccionar una muestra de 150 mujeres (si su n° de equipo es un número par) o 150 hombres (si su n° de equipo es impar), asegurando que la mitad tenga estado nutricional “sobrepeso” y la otra mitad “no sobrepeso” en cada caso. Dividir esta muestra en dos conjuntos: los datos de 100 personas (50 con EN “sobrepeso”) para utilizar en la construcción de los modelos y 50 personas (25 con EN “sobrepeso”) para poder evaluarlos.
+
+```{r}
+set.seed(2113)
+
+# 8 es par --> trabajamos con mujeres
+# Se escogen solo mujeres
+mujeres <- datos |> filter(Gender == 0)
+
+# Se separan de acuerdo a sus estados nutricionales
+sobrepeso <- mujeres |> filter(EN == 1)
+no_sobrepeso <- mujeres |> filter(EN == 0)
+
+# Se obtienen las muestras solicitadas por el enunciado
+muestra_sobrepeso <- sobrepeso |> slice_sample(n = 75)
+muestra_no_sobrepeso <- no_sobrepeso |> slice_sample(n = 75)
+
+# Se obtienen filas aleatorias para la construcción del modelo
+filas <- sample(1:nrow(muestra_sobrepeso), size = 50)
+filas2 <- sample(1:nrow(muestra_no_sobrepeso), size = 50)
+
+# Apilo las filas en una sola variable
+muestra_modelo <- rbind(muestra_sobrepeso[filas, ], muestra_no_sobrepeso[filas2, ])
+muestra_test <- rbind(muestra_sobrepeso[-filas, ], muestra_no_sobrepeso[-filas2, ])
+
+```
+
+
+## 2. Recordar las ocho posibles variables predictoras seleccionadas de forma aleatoria en el ejercicio anterior.
+
+Las 8 posibles variables predictoras seleccionadas en el EP09 fueron: Wrist.Minimum.Girth, Ankles.diameter, Biiliac.diameter, Ankle.Minimum.Girth, Elbows.diameter, Chest.Girth, Chest.depth y Shoulder.Girth
+
+```{r}
+posibles_predictores <- muestra_modelo[, c(2, 4, 6, 9, 10, 11, 20, 21, 27)]
+```
+
+
+## 3. Seleccionar, de las otras variables, una que el equipo considere que podría ser útil para predecir la clase EN, justificando bien esta selección (idealmente con literatura).
+
+Se piensa que una variable que podría predecir bien el sobrepeso en mujeres es Waist.Girth, ya que es una zona que tiende a acumular grasa, por lo que una circunferencia mayor de cintura podría indicar acumulación de grasa, lo que se podría traducir en mayor peso y, por ende, en un mayor IMC, derivando en sobrepeso.
+
+## 4. Usando el entorno R, construir un modelo de regresión logística con el predictor seleccionado en el paso anterior y utilizando de la muestra obtenida.
+
+
+```{r}
+# Se construye el modelo
+modelo <- glm(EN ~ Waist.Girth, family = binomial(link = "logit"), data = muestra_modelo)
+print(summary(modelo))
+
+```
+
+```{r}
+# Grafico de EN en función de Waist.Girth
+g1 <- ggscatter(muestra_modelo, x = "EN", y = "Waist.Girth", color = "steelblue", fill = "steelblue1", alpha = 0.5, size = 3, xlab = "Estado Nutricional", ylab = "Grosor a la altura de la cintura", xticks.by = 1)
+
+print(g1)
+```
+
+
+## 5. Usando herramientas estándares para la exploración de modelos del entorno R, buscar entre dos y cinco predictores de entre las variables seleccionadas al azar, recordadas en el punto 2, para agregar al modelo obtenido en el paso 4.
+
+```{r}
+combinaciones <- regsubsets(EN ~ ., posibles_predictores, nbest = 1, nvmax = 16, method = "exhaustive")
+
+plot(combinaciones)
+```
+
+De acuerdo a las combinaciones obtenidas, el mejor modelo consta de 2 variables predictoras: Chest.Girth y Ankle.Minimum.Girth, teniendo un BIC de -70, por lo que estas son las seleccionadas para ser agregadas al modelo anterior.
+
+```{r}
+nuevo_modelo <- glm(EN ~ Waist.Girth + Chest.Girth + Ankle.Minimum.Girth, family = binomial(link = "logit"), data = muestra_modelo)
+print(summary(nuevo_modelo))
+```
+
+## 6. Evaluar la confiabilidad y generalidad de los modelos (i.e. que tengan un buen nivel de ajuste, que cumplen las condiciones para RLogit y no están dominados por casos sobreinfluyentes) y “arreglarlos” en caso de que tengan algún problema.
+
+Se deben revisar el ajuste, la linealidad entre los predictores y el logit, la independencia de los residuos, la multicolinealidad, la convergencia y la presencia de observaciones influyentes.
+
+#### 6.1 Ajuste y convergencia
+
+Se compara cada modelo con el modelo nulo mediante la prueba de razón de verosimilitudes (LRT). También se comparan ambos modelos entre sí, ya que el modelo simple está contenido en el múltiple. Un valor p menor que 0,05 indica una mejora significativa del ajuste. Entre modelos confiables se prefiere un AIC menor.
+
+```{r}
+# Ajuste frente al modelo nulo
+anova(modelo, test = "LRT")
+anova(nuevo_modelo, test = "LRT")
+
+# Aporte de los predictores agregados
+anova(modelo, nuevo_modelo, test = "LRT")
+
+# Criterio de ajuste y convergencia
+data.frame(
+  Modelo = c("Simple", "Múltiple"),
+  AIC = c(AIC(modelo), AIC(nuevo_modelo)),
+  Convergio = c(modelo$converged, nuevo_modelo$converged),
+  Iteraciones = c(modelo$iter, nuevo_modelo$iter)
+)
+```
+
+Los modelos deben haber convergido sin advertencias ni coeficientes o errores estándar excesivamente grandes. La muestra contiene 100 personas balanceadas entre ambas clases y los modelos usan uno y tres predictores numéricos, respectivamente, por lo que existe una cantidad razonable de observaciones para estimarlos.
+
+#### 6.2 Condiciones del modelo
+
+La linealidad con la respuesta transformada se revisa mediante `residualPlots()` usando `fitted = FALSE`, como se indica para regresión logística. En las pruebas de curvatura, valores p mayores que 0,05 indican que no hay evidencia de una relación no lineal.
+
+La independencia se estudia con Durbin-Watson. Un valor p mayor que 0,05 indica que no hay evidencia de autocorrelación. La multicolinealidad solo se revisa en el modelo múltiple mediante VIF; valores superiores a 5 serían preocupantes.
+
+```{r}
+# Linealidad entre predictores y logit
+residualPlots(modelo, fitted = FALSE)
+residualPlots(nuevo_modelo, fitted = FALSE)
+
+# Independencia de los residuos
+durbinWatsonTest(modelo)
+durbinWatsonTest(nuevo_modelo)
+
+# Multicolinealidad del modelo múltiple
+vif(nuevo_modelo)
+```
+
+#### 6.3 Observaciones influyentes
+
+Se utiliza `influencePlot()` para revisar conjuntamente residuos studentizados, apalancamiento y distancia de Cook. Los casos etiquetados son potencialmente problemáticos, pero no deben eliminarse automáticamente: primero se debe comprobar si corresponden a errores o a observaciones legítimas.
+
+```{r}
+influencePlot(
+  modelo,
+  main = "Influencia: modelo simple",
+  sub = "Tamaño de burbuja proporcional a Cook"
+)
+
+influencePlot(
+  nuevo_modelo,
+  main = "Influencia: modelo múltiple",
+  sub = "Tamaño de burbuja proporcional a Cook"
+)
+```
+
+Como apoyo, se muestran solo los casos que superan alguno de los criterios usados en clases: residuo studentizado mayor que 2 en valor absoluto, apalancamiento superior al doble del promedio o distancia de Cook superior a `qf(0.5, p, n-p)`.
+
+```{r}
+diagnostico_influencia <- function(mod) {
+  n <- nobs(mod)
+  p <- length(coef(mod))
+
+  tabla <- data.frame(
+    Caso = seq_len(n),
+    StudRes = rstudent(mod),
+    Hat = hatvalues(mod),
+    CookD = cooks.distance(mod)
+  )
+
+  tabla |>
+    filter(
+      abs(StudRes) > 2 |
+      Hat > 2 * mean(Hat) |
+      CookD > qf(0.5, p, n - p)
+    )
+}
+
+cat("Casos destacados en el modelo simple:\n")
+diagnostico_influencia(modelo)
+
+cat("Casos destacados en el modelo múltiple:\n")
+diagnostico_influencia(nuevo_modelo)
+```
+
+#### 6.4 Decisión
+
+Si los modelos presentan una LRT significativa frente al modelo nulo, convergen correctamente, no muestran curvatura, autocorrelación ni VIF preocupantes, y sus coeficientes no están dominados por casos influyentes, pueden considerarse confiables.
+
+Si aparece un problema, la corrección depende de su naturaleza: transformar un predictor ante curvatura, retirar un predictor redundante ante multicolinealidad o revisar cuidadosamente los datos ante observaciones influyentes. Después de cualquier cambio se debe reconstruir y volver a evaluar el modelo. No corresponde eliminar casos solo por superar un umbral estadístico.
+
+
+## 7. Usando código estándar, evaluar el poder predictivo de los modelos con los datos de las 50 personas que no se incluyeron en su construcción en términos de sensibilidad y especificidad.
+
+#### A. Evalución del modelo simple (1 predictor)
+
+```{r}
+# Obtenemos las probabilidades predichas para el conjunto de prueba
+probabilidades_simple <- predict(modelo, newdata = muestra_test, type = "response")
+
+# Clasificamos las predicciones usando un punto de corte (umbral) de 0.5
+#    Si la probabilidad es >= 0.5, se clasifica como 1 (sobrepeso); de lo contrario, 0.
+prediccion_simple <- ifelse(probabilidades_simple >= 0.5, 1, 0)
+
+# Creamos la matriz de confusión para el modelo simple
+matriz_simple <- table(Prediccion = prediccion_simple, Referencia = muestra_test$EN)
+cat("\nMatriz de Confusión - Modelo Simple:\n")
+print(matriz_simple)
+
+# Calculamos Verdaderos Positivos (TP), Verdaderos Negativos (TN), 
+#    Falsos Positivos (FP) y Falsos Negativos (FN)
+TP_s <- sum(prediccion_simple == 1 & muestra_test$EN == 1)
+TN_s <- sum(prediccion_simple == 0 & muestra_test$EN == 0)
+FP_s <- sum(prediccion_simple == 1 & muestra_test$EN == 0)
+FN_s <- sum(prediccion_simple == 0 & muestra_test$EN == 1)
+
+# Calculamos sensibilidad y especificidad
+#    Sensibilidad: Proporción de casos positivos reales identificados correctamente (TP / (TP + FN))
+#    Especificidad: Proporción de casos negativos reales identificados correctamente (TN / (TN + FP))
+sensibilidad_simple <- TP_s / (TP_s + FN_s)
+especificidad_simple <- TN_s / (TN_s + FP_s)
+
+```
+
+#### B. Evaluación del modelo múltiple (
+
+```{r}
+# Obtenemos las probabilidades predichas usando el modelo múltiple
+probabilidades_multiple <- predict(nuevo_modelo, newdata = muestra_test, type = "response")
+
+# Clasificamos las predicciones con el umbral de 0.5
+prediccion_multiple <- ifelse(probabilidades_multiple >= 0.5, 1, 0)
+
+# Creamos la matriz de confusión para el modelo múltiple
+matriz_multiple <- table(Prediccion = prediccion_multiple, Referencia = muestra_test$EN)
+cat("\nMatriz de Confusión - Modelo Múltiple:\n")
+print(matriz_multiple)
+
+# Calculamos TP, TN, FP y FN para el modelo múltiple
+TP_m <- sum(prediccion_multiple == 1 & muestra_test$EN == 1)
+TN_m <- sum(prediccion_multiple == 0 & muestra_test$EN == 0)
+FP_m <- sum(prediccion_multiple == 1 & muestra_test$EN == 0)
+FN_m <- sum(prediccion_multiple == 0 & muestra_test$EN == 1)
+
+# Calculamos sensibilidad y especificidad
+sensibilidad_multiple <- TP_m / (TP_m + FN_m)
+especificidad_multiple <- TN_m / (TN_m + FP_m)
+
+```
+
+#### C. Resumen de los resultados
+
+```{r}
+# Creamos un Data Frame para presentar los resultados ordenadamente
+resultados_evaluacion <- data.frame(
+  Modelo = c("Simple", "Múltiple"),
+  Sensibilidad = c(sensibilidad_simple, sensibilidad_multiple),
+  Especificidad = c(especificidad_simple, especificidad_multiple)
+)
+
+cat("\nResumen del Poder Predictivo:\n")
+print(resultados_evaluacion) 
+```
